@@ -97,6 +97,8 @@ Panel {
   }
   function reviewAndConfirmSystemPolicy() {
     if (!service) return
+    var draft = JSON.parse(service.editSystemPolicyDraft(draftHibernateDelaySeconds, draftHibernateOnAcPower))
+    if (!draft.accepted) { actionResult = draft.reasonCode; return }
     var review = JSON.parse(service.reviewSystemPolicy())
     if (!review.accepted) { actionResult = review.reasonCode; return }
     ask("apply", "Apply the machine-wide system policy: hibernate after " + formatDuration(draftHibernateDelaySeconds)
@@ -378,7 +380,7 @@ Panel {
     : "No readiness snapshot is available."
   readonly property string statusSummary: statusSnapshot ? "Automatic staged sleep: " + statusSnapshot.automaticStagedSleepReadiness
     + " (" + statusSnapshot.automaticBlockerReasonCode + ")\nManual staged sleep: " + statusSnapshot.manualStagedSleepReadiness
-    + " — " + (statusSnapshot.sleepExecutability.stagedSleepExecutable ? "staged sleep executable" : (statusSnapshot.fallbackAvailable ? "suspend fallback available" : "no suspend fallback"))
+    + " — " + statusSnapshot.sleepExecutabilitySummary
     + "\nStay Awake: " + statusSnapshot.stayAwake + "; re-arm: " + (statusSnapshot.rearmRequired ? "required" : "armed")
     + "\nActive blocker: " + (statusSnapshot.activeBlocker === "none" ? "none (automation paused)" : statusSnapshot.activeBlocker) : "Status unavailable."
   readonly property string manualActionText: statusSnapshot && statusSnapshot.manualConfirmationKind === "suspend-fallback"

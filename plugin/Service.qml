@@ -83,6 +83,7 @@ Item {
     diagnosticsReadinessReasonCode: diagnosticsReasonCode(),
     diagnosticsReadiness: diagnosticsReadiness(),
     sleepExecutability: clone(lastObservation),
+    sleepExecutabilitySummary: sleepExecutabilitySummary(),
     fallbackAvailable: suspendFallbackAvailable(),
     activeBlocker: activeBlocker(),
     heroStatus: heroStatus(),
@@ -144,6 +145,13 @@ Item {
   function suspendFallbackAvailable(): bool {
     return !!lastObservation && !lastObservation.observationFailed
       && !lastObservation.stagedSleepExecutable && !!lastObservation.suspendExecutable
+  }
+
+  function sleepExecutabilitySummary(): string {
+    if (!lastObservation || lastObservation.observationFailed) return "sleep executability unavailable"
+    if (lastObservation.stagedSleepExecutable) return "staged sleep executable"
+    if (lastObservation.suspendExecutable) return "suspend fallback available"
+    return "no suspend or staged sleep executable"
   }
 
   function activeBlocker(): string {

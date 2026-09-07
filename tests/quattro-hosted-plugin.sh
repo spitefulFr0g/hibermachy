@@ -30,6 +30,11 @@ rg -q 'ConfirmDialog' plugin/Panel.qml
 rg -q 'PanelKeyCatcher' plugin/Panel.qml
 rg -q 'resetHistory' plugin/Panel.qml
 rg -q 'heroStatus' plugin/Service.qml
+rg -q 'editSystemPolicyDraft' plugin/Panel.qml
+rg -q 'onTabRequested' plugin/Panel.qml
+rg -q 'onCloseRequested' plugin/Panel.qml
+rg -q 'focusBeforeConfirmation' plugin/Panel.qml
+rg -q 'sleepExecutabilitySummary' plugin/Service.qml
 ! rg -q 'automaticReadiness\(|manualReadiness\(|suspendFallbackAvailable\(' plugin/Panel.qml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
@@ -211,6 +216,9 @@ node -e '
 
 call shell setPluginEnabled "$plugin_id" true | grep -qx 'ok'
 status=$(status_json)
+printf '%s\n' 'HBR-CHK-PANEL-002 panel summon and cancellation return through the hosted shell seam'
+call shell summon "$plugin_id" '{}' >/dev/null
+call shell hide "$plugin_id"
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
 printf '%s\n' 'HBR-CHK-READINESS-001 readiness operations remain independent and live state is exposed'
