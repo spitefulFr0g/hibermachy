@@ -18,7 +18,7 @@ assert_meaning() {
 
 clean=$("$command_path" status --root "$fixture_root")
 printf '%s\n' 'HBR-CHK-LIFECYCLE-001 clean independent inventory'
-for scope in checkout activation menu_contribution helper_package helper_protocol user_configuration_state requested_system_policy owned_target; do
+for scope in checkout activation menu_contribution helper_package helper_protocol automatic_policy_enablement user_configuration_state requested_system_policy owned_target; do
   assert_scope "$clean" "$scope" missing
 done
 jq -e '.installationOwner.state == "unrecognized"' <<<"$clean" >/dev/null
@@ -33,7 +33,7 @@ printf '%s\n' '{"enabled":false}' > "$fixture_root/activation.json"
 printf '%s\n' '{"entries":[{"id":"setup.hibermachy","managedBy":"hibermachy","label":"Sleep & Hibernation","action":"open"},{"id":"system.hibermachy-staged-sleep","managedBy":"hibermachy","label":"Suspend then Hibernate","action":"requestStagedSleep"}]}' > "$fixture_root/menu.json"
 printf '%s\n' 'package=hibermachy-helper version=0.1.0' > "$fixture_root/helper/package"
 printf '%s\n' 'protocol-min=1 protocol-max=1' > "$fixture_root/helper/protocol"
-printf '%s\n' '{"version":1}' > "$fixture_root/user/config.json"
+printf '%s\n' '{"version":1,"automaticPolicyEnablement":"disabled"}' > "$fixture_root/user/config.json"
 printf '%s\n' '{"version":1}' > "$fixture_root/user/state.json"
 printf '%s\n' '# Managed by Hibermachy. Do not edit.
 [Sleep]
@@ -43,11 +43,12 @@ HibernateOnACPower=no
 
 complete=$("$command_path" status --root "$fixture_root")
 printf '%s\n' 'HBR-CHK-LIFECYCLE-002 complete inventory'
-for scope in checkout activation menu_contribution helper_package helper_protocol user_configuration_state requested_system_policy owned_target; do
+for scope in checkout activation menu_contribution helper_package helper_protocol automatic_policy_enablement user_configuration_state requested_system_policy owned_target; do
   assert_scope "$complete" "$scope" compatible
 done
 jq -e '.installationOwner.state == "identified" and .installationOwner.artifacts == "user-owned" and .scopes.requested_system_policy.ownership == "machine-wide" and .scopes.owned_target.ownership == "machine-wide"' <<<"$complete" >/dev/null
 jq -e '.scopes.activation.enabled == false' <<<"$complete" >/dev/null
+jq -e '.scopes.automatic_policy_enablement.state == "compatible" and .scopes.automatic_policy_enablement.automaticPolicyEnablement == "disabled"' <<<"$complete" >/dev/null
 
 printf '%s\n' '{"enabled":true}' > "$fixture_root/activation.json"
 active=$("$command_path" status --root "$fixture_root")
@@ -59,6 +60,8 @@ plugin_removed=$("$command_path" status --root "$fixture_root")
 assert_scope "$plugin_removed" checkout missing
 assert_scope "$plugin_removed" helper_package compatible
 assert_scope "$plugin_removed" requested_system_policy compatible
+assert_scope "$plugin_removed" user_configuration_state compatible
+assert_scope "$plugin_removed" automatic_policy_enablement compatible
 
 rm "$fixture_root/helper/package" "$fixture_root/helper/protocol"
 helper_only=$("$command_path" status --root "$fixture_root")
@@ -81,6 +84,8 @@ assert_scope "$partial" helper_package missing
 assert_scope "$partial" helper_protocol mismatched
 assert_scope "$partial" menu_contribution colliding
 assert_scope "$partial" requested_system_policy unrecognized
+jq -e '.scopes.owned_target.state == "unrecognized"' <<<"$partial" >/dev/null
+jq -e '.scopes.helper_protocol.helperProtocolMin == 9 and .scopes.helper_protocol.helperProtocolMax == 9 and .scopes.helper_protocol.checkoutProtocolMin == 1 and .scopes.helper_protocol.checkoutProtocolMax == 1' <<<"$partial" >/dev/null
 jq -e '(.scopes.checkout.recovery | length > 0) and (.scopes.menu_contribution.recovery | length > 0) and (.scopes.requested_system_policy.recovery | length > 0)' <<<"$partial" >/dev/null
 
 mkdir -p "$fixture_root/plugin"

@@ -95,7 +95,28 @@ protocol_state() {
       awk -F'[ =]' '{ exit !($2 <= 1 && $4 >= 1) }' "$file"; then
     scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
   else
-    scope mismatched machine-wide 'Install a helper whose declared protocol range overlaps this checkout.'
+    local helper_min helper_max
+    helper_min=$(awk -F'[ =]' '{print $2}' "$file")
+    helper_max=$(awk -F'[ =]' '{print $4}' "$file")
+    jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
+      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:1, checkoutProtocolMax:1}' \
+      <<<"$(scope mismatched machine-wide 'Install a helper whose declared protocol range overlaps this checkout.')"
+  fi
+}
+
+automatic_policy_state() {
+  local file="$root/user/config.json"
+  if [[ -L "$file" || ( -e "$file" && ! -r "$file" ) ]]; then
+    scope inaccessible user-owned 'Preserve suspicious user policy for explicit resolution.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope user-owned 'Create user policy only through the user-owned configuration save.'
+  elif ! jq -e '(.automaticPolicyEnablement == "enabled" or .automaticPolicyEnablement == "disabled")' "$file" >/dev/null 2>&1; then
+    scope incomplete user-owned 'Inspect the user policy document before treating automatic staged sleep as enabled or disabled.'
+  else
+    local enablement
+    enablement=$(jq -r .automaticPolicyEnablement "$file")
+    jq --arg enablement "$enablement" '. + {automaticPolicyEnablement:$enablement}' \
+      <<<"$(scope compatible user-owned 'Automatic-policy enablement is distinct from plugin activation.')"
   fi
 }
 
@@ -140,8 +161,12 @@ owned_target_state() {
     missing_scope machine-wide 'Owned target is absent and can be recreated only by authenticated policy apply.'
   elif [[ -L "$file" || ! -f "$file" || ! -r "$file" ]]; then
     scope inaccessible machine-wide 'Do not follow or replace a suspicious owned target.'
-  else
+  elif [[ "$(<"$file")" == $'# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=3600s\nHibernateOnACPower=no' ]]; then
     scope compatible machine-wide 'Target exists; requested-policy content and effective policy remain separate observations.'
+  elif grep -q '^# Managed by Hibermachy\. Do not edit\.$' "$file"; then
+    scope modified machine-wide 'Owned target is modified; preserve it until explicitly resolved.'
+  else
+    scope unrecognized machine-wide 'Unrecognized shared state is not treated as an owned Hibermachy target.'
   fi
 }
 
@@ -157,10 +182,11 @@ scopes_json=$(jq -nc \
   --argjson menu "$(menu_state)" \
   --argjson helper "$(helper_state)" \
   --argjson protocol "$(protocol_state)" \
+  --argjson automatic_policy "$(automatic_policy_state)" \
   --argjson user_data "$(user_data_state)" \
   --argjson policy "$(policy_state)" \
   --argjson target "$(owned_target_state)" \
-  '{checkout:$checkout, activation:$activation, menu_contribution:$menu, helper_package:$helper, helper_protocol:$protocol, user_configuration_state:$user_data, requested_system_policy:$policy, owned_target:$target}')
+  '{checkout:$checkout, activation:$activation, menu_contribution:$menu, helper_package:$helper, helper_protocol:$protocol, automatic_policy_enablement:$automatic_policy, user_configuration_state:$user_data, requested_system_policy:$policy, owned_target:$target}')
 
 jq -n \
   --argjson owner "$owner_json" \
