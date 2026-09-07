@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 
 Item {
   id: root
@@ -13,13 +14,22 @@ Item {
   readonly property int entryEvidenceWindowMs: Math.max(30000, Number(Quickshell.env("HIBERMACHY_SIM_INHIBITOR_DELAY_MS") || 0) + 10000)
   readonly property int postResumeEvidenceWindowMs: 30000
   property bool executionInProgress: false
-  property bool rearmRequired: false
+  property bool rearmRequired: true
+  property bool freshActivityObserved: false
+  property bool idleMonitorHealthy: false
+  property bool compositorIdleInhibited: false
+  property bool stayAwakeKnown: false
+  property bool stayAwakeEnabled: false
+  property bool stayAwakeReadFailed: false
+  property bool automaticEvaluationInProgress: false
   property bool historyLoaded: false
   property bool historyHealthy: true
   property int nextAttemptNumber: 1
   property int nextEventNumber: 1
   property int simulatedSleepSubmissionCount: 0
   property var lastSubmission: null
+  property var liveSleepCapabilities: null
+  property bool sleepCapabilityProbeHealthy: false
   property var lastObservation: observeSleepExecutability()
   property var historyDocument: emptyHistory()
   property var evidenceSubscription: null
@@ -62,6 +72,10 @@ Item {
     automaticReadinessReasonCode: contractReasonCode("automatic"),
     automaticContractReadiness: contractReadiness("automatic"),
     automaticExecutionState: rearmRequired ? "disarmed-rearm-latch" : "disarmed-awaiting-trigger",
+    idleMonitorHealthy: idleMonitorHealthy,
+    compositorIdleInhibited: compositorIdleInhibited,
+    stayAwake: stayAwakeKnown ? (stayAwakeEnabled ? "on" : "off") : "unknown",
+    freshActivityObserved: freshActivityObserved,
     manualReadinessReasonCode: contractReasonCode("manual"),
     systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
     diagnosticsReadinessReasonCode: contractReasonCode("diagnostics"),
@@ -108,7 +122,95 @@ Item {
     if (contractReadiness("automatic") !== "ready") return "not-ready"
     if (!policyAccepted || !policySnapshot || !policySnapshot.automaticPolicyEnabled) return "not-ready"
     if (!requestedSystemPolicy || !effectiveSystemPolicy || systemPolicyReasonCode !== "HBR-SYSTEM-POLICY-APPLIED") return "not-ready"
+    if (!idleMonitorHealthy || compositorIdleInhibited || (stayAwakeKnown && stayAwakeEnabled)) return "not-ready"
+    if (rearmRequired || !freshActivityObserved) return "not-ready"
     return "ready"
+  }
+
+  function persistRearm(required): bool {
+    if (simulatedBoolean("HIBERMACHY_SIM_LATCH_FAILURE", false)) return false
+    rearmRequired = required
+    latchFile.setText(JSON.stringify({ schemaVersion: 1, rearmRequired: required }, null, 2) + "\n")
+    return true
+  }
+
+  function requireFreshActivity() {
+    freshActivityObserved = false
+    if (!persistRearm(true)) rearmRequired = true
+  }
+
+  function observeFreshActivity() {
+    freshActivityObserved = true
+    if (!persistRearm(false)) {
+      freshActivityObserved = false
+      rearmRequired = true
+      return false
+    }
+    return true
+  }
+
+  function handleIdleChanged() {
+    if (testActivityFixture !== null) return
+    if (!idleMonitor.isIdle) {
+      observeFreshActivity()
+      return
+    }
+    requestAutomaticStagedSleep()
+  }
+
+  function requestAutomaticStagedSleep() {
+    if (automaticEvaluationInProgress || executionInProgress) return
+    if (automaticReadiness() !== "ready") return
+    automaticEvaluationInProgress = true
+    if (testStayAwakeFixture !== null) {
+      finishAutomaticEvaluation(testStayAwakeFixture.enabled === true, testStayAwakeFixture.healthy === false)
+      return
+    }
+    stayAwakeProbe.running = true
+  }
+
+  function finishAutomaticEvaluation(stayAwake, readFailed) {
+    automaticEvaluationInProgress = false
+    stayAwakeKnown = !readFailed
+    stayAwakeEnabled = !!stayAwake
+    stayAwakeReadFailed = readFailed
+    if (readFailed || stayAwake) return
+    if (automaticReadiness() !== "ready") return
+    _coordinateStagedSleep("automatic")
+  }
+
+  property var testActivityFixture: Quickshell.env("HBR_TEST_MODE") === "1" ? ({ idle: false, inhibited: false }) : null
+  property var testStayAwakeFixture: null
+
+  function setActivityFixture(fixtureJson): string {
+    if (testActivityFixture === null) return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    try {
+      var fixture = JSON.parse(String(fixtureJson))
+      if (!fixture || typeof fixture !== "object") throw new Error("fixture")
+      testActivityFixture = { idle: fixture.idle === true, inhibited: fixture.inhibited === true }
+      compositorIdleInhibited = testActivityFixture.inhibited
+      idleMonitorHealthy = fixture.healthy !== false
+      if (!testActivityFixture.idle) observeFreshActivity()
+      else requestAutomaticStagedSleep()
+      return result("accepted", "HBR-TEST-ACTIVITY-FIXTURE-SET", { fixture: testActivityFixture })
+    } catch (error) {
+      return result("refused", "HBR-TEST-ACTIVITY-FIXTURE-MALFORMED", {})
+    }
+  }
+
+  function setStayAwakeFixture(fixtureJson): string {
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    try {
+      var fixture = JSON.parse(String(fixtureJson))
+      if (!fixture || typeof fixture !== "object") throw new Error("fixture")
+      testStayAwakeFixture = { enabled: fixture.enabled === true, healthy: fixture.healthy !== false }
+      stayAwakeKnown = testStayAwakeFixture.healthy
+      stayAwakeEnabled = testStayAwakeFixture.enabled
+      stayAwakeReadFailed = !testStayAwakeFixture.healthy
+      return result("accepted", "HBR-TEST-STAY-AWAKE-FIXTURE-SET", { fixture: testStayAwakeFixture })
+    } catch (error) {
+      return result("refused", "HBR-TEST-STAY-AWAKE-FIXTURE-MALFORMED", {})
+    }
   }
 
   function loadContractProbe(output, exitCode) {
@@ -126,6 +228,7 @@ Item {
         missingContracts: missing,
         laterVersion: parsed.laterVersion === true
       }
+      idleMonitorHealthy = contractSnapshot.compatible && parsed.idleMonitor === true
     }
     contractProbeComplete = true
   }
@@ -138,6 +241,10 @@ Item {
   }
 
   function observeSleepExecutability(): var {
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+      if (!sleepCapabilityProbeHealthy || !liveSleepCapabilities) return { observationFailed: true }
+      return liveSleepCapabilities
+    }
     return {
       stagedSleepExecutable: simulatedBoolean("HIBERMACHY_SIM_STAGED_SLEEP", true),
       hibernateExecutable: simulatedBoolean("HIBERMACHY_SIM_HIBERNATE", true),
@@ -168,6 +275,17 @@ Item {
 
   function result(kind, reasonCode, details): string {
     return JSON.stringify(Object.assign({ kind: kind, reasonCode: reasonCode }, details || {}))
+  }
+
+  function automaticPolicyChanged(previous, next): bool {
+    return !!previous && !!next
+      && (previous.automaticPolicyEnabled !== next.automaticPolicyEnabled
+        || previous.idleDelaySeconds !== next.idleDelaySeconds)
+  }
+
+  function systemPolicyMatches(left, right): bool {
+    return !!left && !!right && left.hibernateDelaySeconds === right.hibernateDelaySeconds
+      && left.hibernateOnAcPower === right.hibernateOnAcPower
   }
 
   function clone(value): var { return JSON.parse(JSON.stringify(value)) }
@@ -215,11 +333,14 @@ Item {
   }
 
   function loadLatch(raw): void {
+    // A new service must observe activity again; disk state only prevents
+    // retrying an unfinished request and never proves current activity.
+    rearmRequired = true
+    freshActivityObserved = false
     if (String(raw || "").trim() === "") return
     try {
-      var parsed = JSON.parse(raw)
-      rearmRequired = parsed.schemaVersion === 1 && parsed.rearmRequired === true
-    } catch (error) { rearmRequired = true }
+      JSON.parse(raw)
+    } catch (error) { /* malformed latch remains fail-closed */ }
   }
 
   function persistHistory(allowOpenAttemptDuringDiagnosticFault): bool {
@@ -248,10 +369,7 @@ Item {
   }
 
   function persistLatch(): bool {
-    if (simulatedBoolean("HIBERMACHY_SIM_LATCH_FAILURE", false)) return false
-    rearmRequired = true
-    latchFile.setText(JSON.stringify({ schemaVersion: 1, rearmRequired: true }, null, 2) + "\n")
-    return true
+    return persistRearm(true)
   }
 
   function trimHistory(outcomes): var {
@@ -356,7 +474,8 @@ Item {
         policyReasonCode = "HBR-POLICY-REVISION-CONFLICT"
         return
       }
-      if (policySnapshot && (value.automaticPolicyEnabled !== policySnapshot.automaticPolicyEnabled || value.idleDelaySeconds !== policySnapshot.idleDelaySeconds)) {
+      var policyChanged = automaticPolicyChanged(policySnapshot, value)
+      if (policyChanged) {
         value.revision = value.revision === Number.MAX_SAFE_INTEGER ? value.revision : value.revision + 1
       }
       var persistenceBlocked = policyReasonCode === "HBR-POLICY-PERSISTENCE"
@@ -367,6 +486,7 @@ Item {
       policyReasonCode = !policyDirectoryWritable || persistenceBlocked
         ? "HBR-POLICY-PERSISTENCE"
         : (value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED")
+      if (policyChanged) requireFreshActivity()
     } catch (error) {
       if (String(raw || "").trim() === "") {
         policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
@@ -453,6 +573,13 @@ Item {
     if (fixture.readback === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE")
     var requested = { hibernateDelaySeconds: systemPolicyDraft.hibernateDelaySeconds,
       hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide" }
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+      systemPolicyBusy = true
+      systemPolicyMutation = "apply"
+      helperProcess.command = [helperLauncherPath, helperPath, "apply", String(requested.hibernateDelaySeconds), requested.hibernateOnAcPower ? "yes" : "no"]
+      helperProcess.running = true
+      return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED", { pair: requested })
+    }
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
       systemPolicyMutation = "apply"
@@ -462,19 +589,27 @@ Item {
     }
     var readback = fixture.readbackPolicy || requested
     if (fixture.readback === "contradictory") readback = { hibernateDelaySeconds: requested.hibernateDelaySeconds + 1, hibernateOnAcPower: requested.hibernateOnAcPower }
-    if (readback.hibernateDelaySeconds !== requested.hibernateDelaySeconds || readback.hibernateOnAcPower !== requested.hibernateOnAcPower)
+    if (!systemPolicyMatches(readback, requested))
       return policyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-CONTRADICTORY")
     requestedSystemPolicy = requested
     effectiveSystemPolicy = fixture.effective || requested
     systemPolicyProvenance = fixture.provenance || []
-    systemPolicyReasonCode = effectiveSystemPolicy.hibernateDelaySeconds === requested.hibernateDelaySeconds && effectiveSystemPolicy.hibernateOnAcPower === requested.hibernateOnAcPower
+    systemPolicyReasonCode = systemPolicyMatches(effectiveSystemPolicy, requested)
       ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    requireFreshActivity()
     return policyReceipt(true, systemPolicyReasonCode, { pair: requested })
   }
 
   function resetSystemPolicy(): string {
     if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+      systemPolicyBusy = true
+      systemPolicyMutation = "reset"
+      helperProcess.command = [helperLauncherPath, helperPath, "reset"]
+      helperProcess.running = true
+      return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED")
+    }
     var fixture = systemPolicyFixture || {}
     if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
@@ -501,6 +636,7 @@ Item {
     if (executionInProgress) return result("refused", "HBR-SLEEP-BUSY", {})
     if (contractReadiness(origin === "manual" ? "manual" : "automatic") !== "ready")
       return result("failed", contractReasonCode(origin === "manual" ? "manual" : "automatic"), { operation: "staged-sleep" })
+    if (origin === "automatic" && automaticReadiness() !== "ready") return result("refused", "HBR-SLEEP-AUTOMATIC-SUPPRESSED", {})
     executionInProgress = true
     var observation = observeSleepExecutability()
     lastObservation = observation
@@ -522,7 +658,7 @@ Item {
       return result("failed", "HBR-HISTORY-REARM-PERSISTENCE-FAILED", {})
     }
 
-    var attemptId = "manual-" + nextAttemptNumber++
+    var attemptId = origin + "-" + nextAttemptNumber++
     var subscription = subscribeTypedEvidence(attemptId)
     var openAttempt = eventEnvelope(attemptId, origin, selectedMode, "request-enqueue", null,
       "HBR-SLEEP-ENQUEUE-PENDING", "typed-subscription", {
@@ -541,6 +677,14 @@ Item {
       selectedMode: selectedMode, selectionPath: selectionPath, simulated: true,
       openAttemptPersistedBeforeEnqueue: true, evidenceSubscribedBeforeEnqueue: true }
     simulatedSleepSubmissionCount += 1
+
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+      lastSubmission.simulated = false
+      sleepRequestProcess.command = ["systemctl", selectedMode === "suspend" ? "suspend" : "suspend-then-hibernate"]
+      sleepRequestProcess.running = true
+      return result("accepted", "HBR-SLEEP-ACCEPTED", { attemptId: attemptId,
+        selectedMode: selectedMode, selectionPath: selectionPath })
+    }
 
     var observed = evidenceResult(selectionPath)
     if (observed) {
@@ -561,6 +705,10 @@ Item {
 
   function status(): string {
     lastObservation = observeSleepExecutability()
+    if (testActivityFixture !== null) {
+      compositorIdleInhibited = testActivityFixture.inhibited
+      idleMonitorHealthy = true
+    }
     return JSON.stringify(statusSnapshot)
   }
 
@@ -572,6 +720,82 @@ Item {
   }
 
   Process {
+    id: sleepCapabilityProbe
+    command: ["loginctl", "show-logind", "-p", "CanSuspend", "-p", "CanHibernate", "-p", "CanSuspendThenHibernate", "-p", "BlockInhibited"]
+    stdout: StdioCollector { id: sleepCapabilityStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var values = {}
+      String(sleepCapabilityStdout.text || "").split("\n").forEach(function(line) {
+        var pair = line.split("=")
+        if (pair.length === 2) values[pair[0]] = pair[1].trim()
+      })
+      root.sleepCapabilityProbeHealthy = exitCode === 0
+        && values.CanSuspend !== undefined && values.CanHibernate !== undefined
+        && values.CanSuspendThenHibernate !== undefined && values.BlockInhibited !== undefined
+      if (!root.sleepCapabilityProbeHealthy) {
+        root.liveSleepCapabilities = null
+        return
+      }
+      root.liveSleepCapabilities = {
+        stagedSleepExecutable: values.CanSuspendThenHibernate === "yes",
+        hibernateExecutable: values.CanHibernate === "yes",
+        suspendExecutable: values.CanSuspend === "yes",
+        systemSleepInhibited: values.BlockInhibited.split(":").indexOf("sleep") >= 0,
+        observationFailed: false
+      }
+    }
+  }
+
+  Process {
+    id: sleepRequestProcess
+    onExited: function(exitCode) {
+      var attempt = root.lastSubmission
+      if (!attempt) return
+      root.appendTerminal(root.eventEnvelope(attempt.attemptId, attempt.origin, attempt.selectedMode,
+        "transaction-return", exitCode === 0 ? "Completed" : "Failed",
+        exitCode === 0 ? "HBR-SLEEP-TRANSACTION-RETURNED" : "HBR-SLEEP-UNIT-FAILED",
+        exitCode === 0 ? "typed-transaction-return" : "typed-unit-result",
+        { hibernationConfirmed: false, freeFormJournalUsedForState: false }))
+      root.executionInProgress = false
+    }
+  }
+
+  IdleMonitor {
+    id: idleMonitor
+    enabled: root.testActivityFixture === null
+      ? root.policyAccepted && root.policySnapshot !== null
+      : false
+    timeout: root.policySnapshot ? root.policySnapshot.idleDelaySeconds : 1800
+    respectInhibitors: true
+    onIsIdleChanged: root.handleIdleChanged()
+  }
+
+  Process {
+    id: stayAwakeProbe
+    command: ["omarchy-toggle-idle", "status"]
+    stdout: StdioCollector { id: stayAwakeStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var parsed = null
+      try { parsed = JSON.parse(String(stayAwakeStdout.text || "")) } catch (error) { parsed = null }
+      root.finishAutomaticEvaluation(parsed && parsed.enabled === true, exitCode !== 0 || !parsed || typeof parsed.enabled !== "boolean")
+    }
+  }
+
+  Timer {
+    interval: 250
+    repeat: true
+    running: Quickshell.env("HBR_TEST_MODE") !== "1"
+    onTriggered: if (!stayAwakeProbe.running) stayAwakeProbe.running = true
+  }
+
+  Timer {
+    interval: 250
+    repeat: true
+    running: Quickshell.env("HBR_TEST_MODE") !== "1"
+    onTriggered: if (!sleepCapabilityProbe.running) sleepCapabilityProbe.running = true
+  }
+
+  Process {
     id: helperProcess
     stdout: StdioCollector { id: helperStdout; waitForEnd: true }
     onExited: function(exitCode) {
@@ -580,15 +804,72 @@ Item {
         root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-WRITE-FAILED"
         return
       }
+      if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+        if (root.systemPolicyMutation === "apply") {
+          root.requestedSystemPolicy = root.systemPolicyDraft
+          root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-PENDING"
+          effectivePolicyProcess.running = true
+        } else {
+          root.requestedSystemPolicy = null
+          root.effectiveSystemPolicy = null
+          root.systemPolicyProvenance = []
+          root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET"
+          root.systemPolicyMutation = ""
+          root.systemPolicyBusy = false
+        }
+        return
+      }
       root.requestedSystemPolicy = root.systemPolicyMutation === "apply" ? root.systemPolicyDraft : null
       var fixture = root.systemPolicyFixture || {}
       root.effectiveSystemPolicy = root.requestedSystemPolicy ? (fixture.effective || root.requestedSystemPolicy) : null
       root.systemPolicyProvenance = root.requestedSystemPolicy ? (fixture.provenance || []) : []
       root.systemPolicyReasonCode = root.requestedSystemPolicy
-        ? ((root.effectiveSystemPolicy.hibernateDelaySeconds === root.requestedSystemPolicy.hibernateDelaySeconds && root.effectiveSystemPolicy.hibernateOnAcPower === root.requestedSystemPolicy.hibernateOnAcPower) ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS")
+        ? (root.systemPolicyMatches(root.effectiveSystemPolicy, root.requestedSystemPolicy) ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS")
         : "HBR-SYSTEM-POLICY-RESET"
+      if (root.requestedSystemPolicy) root.requireFreshActivity()
       root.systemPolicyMutation = ""
       root.systemPolicyBusy = false
+    }
+  }
+
+  Process {
+    id: effectivePolicyProcess
+    command: [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
+    stdout: StdioCollector { id: effectivePolicyStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var text = String(effectivePolicyStdout.text || "")
+      var delay = text.match(/HibernateDelaySec=([0-9]+)s/)
+      var onAc = text.match(/HibernateOnACPower=(yes|no)/)
+      if (exitCode !== 0 || !delay || !onAc || !Number.isSafeInteger(Number(delay[1]))) {
+        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+      } else {
+        root.effectiveSystemPolicy = { hibernateDelaySeconds: Number(delay[1]), hibernateOnAcPower: onAc[1] === "yes" }
+        root.systemPolicyProvenance = []
+        root.systemPolicyReasonCode = root.systemPolicyMatches(root.effectiveSystemPolicy, root.requestedSystemPolicy)
+          ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+        root.requireFreshActivity()
+      }
+      root.systemPolicyMutation = ""
+      root.systemPolicyBusy = false
+    }
+  }
+
+  Process {
+    id: initialPolicyProbe
+    command: [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
+    stdout: StdioCollector { id: initialPolicyStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var text = String(initialPolicyStdout.text || "")
+      var owned = text.indexOf("90-hibermachy.conf") >= 0
+      var delay = text.match(/HibernateDelaySec=([0-9]+)s/)
+      var onAc = text.match(/HibernateOnACPower=(yes|no)/)
+      if (exitCode !== 0 || !owned || !delay || !onAc) return
+      var policy = { hibernateDelaySeconds: Number(delay[1]), hibernateOnAcPower: onAc[1] === "yes", scope: "machine-wide" }
+      if (!root.validSystemPolicy(policy)) return
+      root.requestedSystemPolicy = policy
+      root.effectiveSystemPolicy = policy
+      root.systemPolicyProvenance = ["/etc/systemd/sleep.conf.d/90-hibermachy.conf"]
+      root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-APPLIED"
     }
   }
 
@@ -601,10 +882,12 @@ Item {
     onLoaded: root.loadUserPolicy(text(), data())
     onLoadFailed: root.loadUserPolicy("")
     onSaved: {
+      var changed = root.automaticPolicyChanged(root.policySnapshot, root.pendingUserPolicy)
       if (root.pendingUserPolicy) {
         root.policySnapshot = root.pendingUserPolicy
         root.policyReasonCode = root.pendingUserPolicy.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
       }
+      if (changed) root.requireFreshActivity()
       root.pendingUserPolicy = null
       root.policyWriteInFlight = false
     }
@@ -660,10 +943,16 @@ Item {
   }
 
   Component.onCompleted: {
+    if (Quickshell.env("HBR_TEST_MODE") === "1") idleMonitorHealthy = true
     contractProbe.running = true
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") sleepCapabilityProbe.running = true
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") initialPolicyProbe.running = true
     policyFile.reload()
     historyFile.reload()
     latchFile.reload()
+    Qt.callLater(function() {
+      if (root.testActivityFixture === null && !idleMonitor.isIdle) root.observeFreshActivity()
+    })
   }
 
   IpcHandler {
@@ -678,5 +967,7 @@ Item {
     function applySystemPolicy(): string { return root.applySystemPolicy() }
     function resetSystemPolicy(): string { return root.resetSystemPolicy() }
     function setSystemPolicyFixture(fixtureJson: string): string { return root.setSystemPolicyFixture(fixtureJson) }
+    function setActivityFixture(fixtureJson: string): string { return root.setActivityFixture(fixtureJson) }
+    function setStayAwakeFixture(fixtureJson: string): string { return root.setStayAwakeFixture(fixtureJson) }
   }
 }

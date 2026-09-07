@@ -30,6 +30,9 @@ cleanup() {
     kill "$host_pid" || true
     wait "$host_pid" 2>/dev/null || true
   fi
+  # IdleMonitor owns a Wayland object; let the disposable compositor/runtime
+  # finish releasing it before the next matrix case starts.
+  sleep 0.5
   chmod 700 "${policy_path%/*}" 2>/dev/null || true
   rm -rf "$test_root"
   exit "$status"
@@ -385,6 +388,56 @@ for expected_delay in 700 701; do
 done
 policy=$(user_policy_json)
 node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==8 || ![700,701].includes(p.idleDelaySeconds)) process.exit(1)' "$policy"
+
+printf '%s\n' 'HBR-CHK-AUTO-001 automatic staged sleep waits for fresh activity after enablement'
+if [[ "${HIBERMACHY_EXPECTED_KIND:-accepted}" == accepted \
+  && "${HIBERMACHY_SIM_CONTRACT:-}" != missing \
+  && "${HIBERMACHY_SIM_SYSTEM_INHIBITED:-0}" != 1 \
+  && "${HIBERMACHY_SIM_OBSERVATION_FAILURE:-0}" != 1 \
+  && ("${HIBERMACHY_SIM_STAGED_SLEEP:-1}" != 0 || "${HIBERMACHY_SIM_SUSPEND:-1}" != 0) ]]; then
+call "$plugin_id" editSystemPolicyDraft 9000 false >/dev/null
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"fixture","helper":"accepted","effective":{"hibernateDelaySeconds":9000,"hibernateOnAcPower":false}}' >/dev/null
+call "$plugin_id" applySystemPolicy >/dev/null
+for _ in $(seq 1 20); do
+  status=$(status_json)
+  if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.systemPolicyReadiness==="ready" ? 0 : 1)' "$status"; then break; fi
+  sleep 0.1
+done
+call "$plugin_id" setStayAwakeFixture '{"enabled":false}' >/dev/null
+call "$plugin_id" setActivityFixture '{"idle":true}' >/dev/null
+sleep 0.3
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==0 || s.rearmRequired!==true) process.exit(1)' "$status"
+call "$plugin_id" setActivityFixture '{"idle":false}' >/dev/null
+call "$plugin_id" setActivityFixture '{"idle":true}' >/dev/null
+for _ in $(seq 1 20); do
+  status=$(status_json)
+  if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.simulatedSleepSubmissionCount===1 ? 0 : 1)' "$status"; then break; fi
+  sleep 0.1
+done
+node -e 'const s=JSON.parse(process.argv[1]); if (s.lastSubmission.origin!=="automatic" || s.lastSubmission.selectedMode!==process.argv[2]) process.exit(1)' "$status" "${HIBERMACHY_EXPECTED_MODE:-suspend-then-hibernate}"
+
+printf '%s\n' 'HBR-CHK-AUTO-002 Stay Awake and compositor inhibitors suppress without submission'
+call "$plugin_id" setActivityFixture '{"idle":false}' >/dev/null
+call "$plugin_id" setStayAwakeFixture '{"enabled":true}' >/dev/null
+call "$plugin_id" setActivityFixture '{"idle":true}' >/dev/null
+sleep 0.3
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==1 || s.stayAwake!=="on") { console.error(JSON.stringify(s)); process.exit(1) }' "$status"
+call "$plugin_id" setStayAwakeFixture '{"enabled":false}' >/dev/null
+call "$plugin_id" setActivityFixture '{"idle":false}' >/dev/null
+call "$plugin_id" setActivityFixture '{"idle":true,"inhibited":true}' >/dev/null
+sleep 0.3
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==1 || !s.compositorIdleInhibited) { console.error(JSON.stringify(s)); process.exit(1) }' "$status"
+
+printf '%s\n' 'HBR-CHK-AUTO-003 manual request remains available while automatic latch is set'
+call "$plugin_id" setActivityFixture '{"idle":false}' >/dev/null
+receipt=$(call "$plugin_id" requestStagedSleep)
+node -e 'const r=JSON.parse(process.argv[1]); if (r.kind!=="accepted") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==2 || !s.rearmRequired) process.exit(1)' "$status"
+fi
 
 printf '%s\n' 'HBR-CHK-POLICY-010 byte and UTF-8 failures stay untouched and disarm automation'
 node -e 'require("fs").writeFileSync(process.argv[1], Buffer.alloc(16385, 0x20))' "$policy_path"
