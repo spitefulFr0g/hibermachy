@@ -7,6 +7,8 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_SIM_SUSPEND=0 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=missing HIBERMACHY_EXPECTED_KIND=failed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=later HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=missing HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE "$0"
@@ -44,6 +46,7 @@ printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.j
 
 helper_fixture="$test_root/helper-fixture"
 effective_fixture="$test_root/effective-policy-fixture"
+contract_fixture="$test_root/contract-probe-fixture"
 cat > "$helper_fixture" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -65,8 +68,20 @@ set -euo pipefail
 printf '%s\n' '/etc/systemd/sleep.conf.d/90-hibermachy.conf' '[Sleep]' 'HibernateDelaySec=9000s' 'HibernateOnACPower=no'
 EOF
 chmod 700 "$helper_fixture" "$effective_fixture"
+cat > "$contract_fixture" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing ]]; then
+  printf '%s\n' '{"compatible":false,"majorVersion":4,"shellReady":true,"pluginDiscovery":false}'
+elif [[ "${HIBERMACHY_SIM_CONTRACT:-}" == later ]]; then
+  printf '%s\n' '{"compatible":true,"laterVersion":true,"majorVersion":4,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
+else
+  printf '%s\n' '{"compatible":true,"majorVersion":4,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
+fi
+EOF
+chmod 700 "$contract_fixture"
 
-HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" HBR_TEST_MODE=1 HBR_POLICY_HELPER_PATH="$helper_fixture" HBR_POLICY_HELPER_LAUNCHER="$helper_fixture" HBR_EFFECTIVE_POLICY_READER="$effective_fixture" OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
+HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" HBR_TEST_MODE=1 HBR_CONTRACT_PROBE="$contract_fixture" HBR_POLICY_HELPER_PATH="$helper_fixture" HBR_POLICY_HELPER_LAUNCHER="$helper_fixture" HBR_EFFECTIVE_POLICY_READER="$effective_fixture" OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
 host_pid=$!
 
 call() {
@@ -183,6 +198,22 @@ printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
 printf '%s\n' 'HBR-CHK-SYSTEM-001 system policy starts as an independent unpersisted draft'
 assert_system_policy_draft "$status"
+
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing ]]; then
+  printf '%s\n' 'HBR-CHK-CONTRACT-001 incompatible contracts close only affected operations'
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.contractReadiness!=="not-ready"||s.contractReasonCode!=="HBR-CONTRACT-INCOMPATIBLE-AUTOMATIC")process.exit(1)' "$status"
+  receipt=$(call "$plugin_id" requestStagedSleep)
+  node -e 'const r=JSON.parse(process.argv[1]); if(r.kind!=="failed"||r.reasonCode!=="HBR-CONTRACT-INCOMPATIBLE-MANUAL")process.exit(1)' "$receipt"
+  receipt=$(call "$plugin_id" applySystemPolicy)
+  node -e 'const r=JSON.parse(process.argv[1]); if(r.accepted||r.reasonCode!=="HBR-CONTRACT-INCOMPATIBLE-SYSTEM-POLICY")process.exit(1)' "$receipt"
+  exit 0
+fi
+
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == later ]]; then
+  printf '%s\n' 'HBR-CHK-CONTRACT-002 later verified feature probes remain usable'
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.contractReadiness!=="ready"||s.contractSnapshot.laterVersion!==true)process.exit(1)' "$status"
+  exit 0
+fi
 
 printf '%s\n' 'HBR-CHK-SYSTEM-002 apply reviews and commits the complete pair'
 call "$plugin_id" editSystemPolicyDraft 9000 false | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if (!r.accepted) process.exit(1)'

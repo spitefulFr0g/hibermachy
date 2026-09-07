@@ -34,19 +34,30 @@ Item {
   property var systemPolicyProvenance: []
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
+  property string systemPolicyMutation: ""
   property var systemPolicyFixture: ({ authorization: Quickshell.env("HBR_TEST_MODE") === "1" ? "authorized" : "unavailable" })
   readonly property string helperPath: Quickshell.env("HBR_POLICY_HELPER_PATH") || "/usr/libexec/hibermachy-policy-helper"
   readonly property string helperLauncherPath: Quickshell.env("HBR_POLICY_HELPER_LAUNCHER") || "pkexec"
   readonly property string effectivePolicyReaderPath: Quickshell.env("HBR_EFFECTIVE_POLICY_READER") || "/usr/bin/systemd-analyze"
+  readonly property string contractProbePath: Quickshell.env("HBR_CONTRACT_PROBE") || "/usr/bin/omarchy-contract-probe"
+  property bool contractProbeComplete: false
+  property var contractSnapshot: null
 
   readonly property var statusSnapshot: ({
     pluginActivation: "active",
     automaticPolicyEnablement: policyAccepted && policySnapshot && policySnapshot.automaticPolicyEnabled ? "enabled" : "disabled",
-    automaticStagedSleepReadiness: "not-ready",
+    automaticStagedSleepReadiness: automaticReadiness(),
     manualStagedSleepReadiness: manualReadiness(lastObservation),
     manualConfirmationKind: confirmationKind(lastObservation),
     manualConfirmationMessage: confirmationMessage(lastObservation),
-    reasonCode: "HBR-AUTO-001",
+    reasonCode: contractReasonCode("automatic"),
+    contractReadiness: contractReadiness("status"),
+    contractReasonCode: contractReasonCode("status"),
+    contractSnapshot: contractSnapshot,
+    automaticReadinessReasonCode: contractReasonCode("automatic"),
+    manualReadinessReasonCode: contractReasonCode("manual"),
+    systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
+    diagnosticsReadinessReasonCode: contractReasonCode("diagnostics"),
     executionInProgress: executionInProgress,
     rearmRequired: rearmRequired,
     historyLoaded: historyLoaded,
@@ -71,6 +82,46 @@ Item {
     return { schemaVersion: 1, openAttempt: null, terminalOutcomes: [], suppressionSummaries: [], notificationFingerprints: [] }
   }
 
+  function contractReasonCode(operation): string {
+    if (!contractProbeComplete) return "HBR-CONTRACT-PREFLIGHT-PENDING"
+    if (!contractSnapshot || contractSnapshot.compatible !== true) {
+      if (operation === "manual") return "HBR-CONTRACT-INCOMPATIBLE-MANUAL"
+      if (operation === "system-policy") return "HBR-CONTRACT-INCOMPATIBLE-SYSTEM-POLICY"
+      if (operation === "diagnostics") return "HBR-CONTRACT-INCOMPATIBLE-DIAGNOSTICS"
+      return "HBR-CONTRACT-INCOMPATIBLE-AUTOMATIC"
+    }
+    return "HBR-CONTRACT-READY"
+  }
+
+  function contractReadiness(operation): string {
+    return contractReasonCode(operation) === "HBR-CONTRACT-READY" ? "ready" : "not-ready"
+  }
+
+  function automaticReadiness(): string {
+    if (contractReadiness("automatic") !== "ready") return "not-ready"
+    if (!policyAccepted || !policySnapshot || !policySnapshot.automaticPolicyEnabled) return "not-ready"
+    return "not-ready"
+  }
+
+  function loadContractProbe(output, exitCode) {
+    var parsed = null
+    try { parsed = JSON.parse(String(output || "")) } catch (error) { parsed = null }
+    if (exitCode !== 0 || !parsed || typeof parsed !== "object") {
+      contractSnapshot = { compatible: false, majorVersion: null, reasonCode: "HBR-CONTRACT-PREFLIGHT-FAILED", observations: {} }
+    } else {
+      var required = ["shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema", "ipcFeatures", "qmlFeatures", "idleMonitor", "helperProtocol", "userPolicy", "systemPolicy", "logind"]
+      var missing = required.filter(function(key) { return parsed[key] !== true })
+      contractSnapshot = {
+        compatible: parsed.compatible === true && missing.length === 0,
+        majorVersion: parsed.majorVersion === undefined ? null : parsed.majorVersion,
+        observations: parsed,
+        missingContracts: missing,
+        laterVersion: parsed.laterVersion === true
+      }
+    }
+    contractProbeComplete = true
+  }
+
   function simulatedBoolean(name, fallback): bool {
     var value = String(Quickshell.env(name) || "").toLowerCase()
     if (value === "1" || value === "true" || value === "yes") return true
@@ -90,6 +141,7 @@ Item {
 
   function manualReadiness(observation): string {
     if (executionInProgress) return "busy"
+    if (contractReadiness("manual") !== "ready") return "not-ready"
     if (observation.observationFailed || observation.systemSleepInhibited) return "not-ready"
     return observation.stagedSleepExecutable || observation.suspendExecutable ? "ready" : "not-ready"
   }
@@ -326,6 +378,7 @@ Item {
   }
 
   function applySystemPolicy(): string {
+    if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (!validSystemPolicy(systemPolicyDraft)) return policyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     var fixture = systemPolicyFixture || {}
@@ -339,6 +392,7 @@ Item {
       hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide" }
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
+      systemPolicyMutation = "apply"
       helperProcess.command = [helperLauncherPath, helperPath, "apply", String(requested.hibernateDelaySeconds), requested.hibernateOnAcPower ? "yes" : "no"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED", { pair: requested })
@@ -356,6 +410,7 @@ Item {
   }
 
   function resetSystemPolicy(): string {
+    if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     var fixture = systemPolicyFixture || {}
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
@@ -364,6 +419,7 @@ Item {
     if (fixture.helper && fixture.helper !== "accepted") return policyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
+      systemPolicyMutation = "reset"
       helperProcess.command = [helperLauncherPath, helperPath, "reset"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED")
@@ -379,6 +435,8 @@ Item {
 
   function _coordinateStagedSleep(origin): string {
     if (executionInProgress) return result("refused", "HBR-SLEEP-BUSY", {})
+    if (contractReadiness(origin === "manual" ? "manual" : "automatic") !== "ready")
+      return result("failed", contractReasonCode(origin === "manual" ? "manual" : "automatic"), { operation: "staged-sleep" })
     executionInProgress = true
     var observation = observeSleepExecutability()
     lastObservation = observation
@@ -443,6 +501,13 @@ Item {
   }
 
   Process {
+    id: contractProbe
+    command: [root.contractProbePath]
+    stdout: StdioCollector { id: contractProbeStdout; waitForEnd: true }
+    onExited: function(exitCode) { root.loadContractProbe(contractProbeStdout.text, exitCode) }
+  }
+
+  Process {
     id: helperProcess
     stdout: StdioCollector { id: helperStdout; waitForEnd: true }
     onExited: function(exitCode) {
@@ -451,10 +516,14 @@ Item {
         root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-WRITE-FAILED"
         return
       }
-      root.requestedSystemPolicy = root.systemPolicyReasonCode === "HBR-SYSTEM-POLICY-UNAPPLIED" ? null : root.systemPolicyDraft
-      root.effectiveSystemPolicy = root.requestedSystemPolicy
-      root.systemPolicyProvenance = []
-      root.systemPolicyReasonCode = root.requestedSystemPolicy ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-RESET"
+      root.requestedSystemPolicy = root.systemPolicyMutation === "apply" ? root.systemPolicyDraft : null
+      var fixture = root.systemPolicyFixture || {}
+      root.effectiveSystemPolicy = root.requestedSystemPolicy ? (fixture.effective || root.requestedSystemPolicy) : null
+      root.systemPolicyProvenance = root.requestedSystemPolicy ? (fixture.provenance || []) : []
+      root.systemPolicyReasonCode = root.requestedSystemPolicy
+        ? ((root.effectiveSystemPolicy.hibernateDelaySeconds === root.requestedSystemPolicy.hibernateDelaySeconds && root.effectiveSystemPolicy.hibernateOnAcPower === root.requestedSystemPolicy.hibernateOnAcPower) ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS")
+        : "HBR-SYSTEM-POLICY-RESET"
+      root.systemPolicyMutation = ""
       root.systemPolicyBusy = false
     }
   }
@@ -488,6 +557,7 @@ Item {
   }
 
   Component.onCompleted: {
+    contractProbe.running = true
     policyFile.reload()
     historyFile.reload()
     latchFile.reload()
@@ -497,13 +567,13 @@ Item {
     target: "dev.hibermachy"
     function status(): string { return root.status() }
     function userPolicy(): string { return root.userPolicy() }
-    function saveUserPolicy(requestJson): string { return root.saveUserPolicy(requestJson) }
+    function saveUserPolicy(requestJson: string): string { return root.saveUserPolicy(requestJson) }
     function resetUserPolicy(): string { return root.resetUserPolicy() }
     function requestStagedSleep(): string { return root.requestStagedSleep() }
-    function editSystemPolicyDraft(delaySeconds, onAcPower): string { return root.editSystemPolicyDraft(delaySeconds, onAcPower) }
+    function editSystemPolicyDraft(delaySeconds: int, onAcPower: bool): string { return root.editSystemPolicyDraft(delaySeconds, onAcPower) }
     function reviewSystemPolicy(): string { return root.reviewSystemPolicy() }
     function applySystemPolicy(): string { return root.applySystemPolicy() }
     function resetSystemPolicy(): string { return root.resetSystemPolicy() }
-    function setSystemPolicyFixture(fixtureJson): string { return root.setSystemPolicyFixture(fixtureJson) }
+    function setSystemPolicyFixture(fixtureJson: string): string { return root.setSystemPolicyFixture(fixtureJson) }
   }
 }
