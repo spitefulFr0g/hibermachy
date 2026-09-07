@@ -21,6 +21,7 @@ function fail(reasonCode, details = {}) {
 function read(file) { return fs.readFileSync(path.join(root, file), "utf8"); }
 function exists(file) { try { return fs.existsSync(path.join(root, file)); } catch { return false; } }
 function regular(file) { try { return fs.lstatSync(path.join(root, file)).isFile(); } catch { return false; } }
+function lstat(file) { try { return fs.lstatSync(path.join(root, file)); } catch { return undefined; } }
 function fixtureOk(file, required = []) { return regular(file) && required.every((entry) => read(file).includes(entry)); }
 
 function event(name) {
@@ -114,6 +115,52 @@ function uninstall() {
     kind: "accepted", operation: "uninstall", installationOwner: read("installation-owner").trim(), scope,
     activation: "disabled", policyReset: "verified-absent", helper: "removed", menu, checkout: "removed",
     retained: { userConfiguration: exists("user/config.json"), outcomeHistory: exists("user/state.json") }, inventory: inventory()
+  };
+}
+
+const purgeScopes = [
+  { name: "userConfiguration", path: "user/config.json", description: "installation owner's Hibermachy configuration" },
+  { name: "outcomeHistory", path: "user/state.json", description: "installation owner's Hibermachy outcome history" }
+];
+
+function validatePurgePath(relativePath) {
+  const rootStat = lstat(".");
+  const userStat = lstat("user");
+  const targetStat = lstat(relativePath);
+  const owner = process.getuid();
+  if (!rootStat || rootStat.isSymbolicLink() || rootStat.uid !== owner ||
+      !userStat || userStat.isSymbolicLink() || !userStat.isDirectory() || userStat.uid !== owner ||
+      (targetStat && (targetStat.isSymbolicLink() || !targetStat.isFile() || targetStat.uid !== owner || targetStat.mode & 0o077))) {
+    throw new Error("HBR-PURGE-UNSAFE-PATH");
+  }
+  return targetStat ? "present" : "absent";
+}
+
+function purge() {
+  const result = uninstall();
+  const scopes = purgeScopes.map((scope) => ({ ...scope, state: validatePurgePath(scope.path) }));
+  if (arguments_.includes("--cancel-purge")) {
+    return { ...result, purge: "retained", purgeScopes: scopes };
+  }
+  if (!arguments_.includes("--confirm-purge")) {
+    const error = new Error("HBR-PURGE-CONFIRMATION-REQUIRED");
+    error.details = { operation: "uninstall", purge: "confirmation-required", purgeScopes: scopes, retained: result.retained };
+    throw error;
+  }
+  for (const scope of scopes) {
+    if (scope.state === "present") {
+      fs.unlinkSync(path.join(root, scope.path));
+      if (interrupted(`purge-${scope.name === "userConfiguration" ? "config" : "state"}`)) {
+        throw new Error("HBR-LIFECYCLE-INTERRUPTED");
+      }
+      if (lstat(scope.path)) throw new Error("HBR-PURGE-ABSENCE-UNVERIFIED");
+    }
+  }
+  return {
+    kind: "accepted", operation: "purge", installationOwner: result.installationOwner,
+    purge: "removed", purgeScopes: scopes,
+    finalInventory: Object.fromEntries(purgeScopes.map((scope) => [scope.name, lstat(scope.path) ? "present" : "absent"])),
+    inventory: inventory()
   };
 }
 
@@ -232,5 +279,5 @@ function activate(confirm) {
 }
 
 if (!root || !fs.existsSync(root)) fail("HBR-LIFECYCLE-ROOT-REQUIRED");
-else if (!["setup", "activate", "uninstall"].includes(command)) fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
-else { try { const result = command === "setup" ? setup() : command === "activate" ? activate(arguments_.includes("--confirm")) : uninstall(); process.stdout.write(JSON.stringify(result) + "\n"); if (result.kind === "refused") process.exitCode = 1; } catch (error) { fail(error instanceof Error ? error.message : "HBR-LIFECYCLE-FAILED"); } }
+else if (!["setup", "activate", "uninstall", "purge"].includes(command)) fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
+else { try { const result = command === "setup" ? setup() : command === "activate" ? activate(arguments_.includes("--confirm")) : command === "uninstall" ? uninstall() : purge(); process.stdout.write(JSON.stringify(result) + "\n"); if (result.kind === "refused") process.exitCode = 1; } catch (error) { fail(error instanceof Error ? error.message : "HBR-LIFECYCLE-FAILED", error?.details ?? {}); } }

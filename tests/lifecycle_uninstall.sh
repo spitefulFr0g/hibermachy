@@ -17,6 +17,7 @@ seed() {
   printf '%s\n' 'protocol-min=1 protocol-max=1' > "$root/helper/protocol"
   printf '%s\n' '{"schemaVersion":1,"revision":2,"automaticPolicyEnablement":true,"idleDelaySeconds":1800}' > "$root/user/config.json"
   printf '%s\n' '{"version":1,"outcomes":[{"outcome":"completed"}]}' > "$root/user/state.json"
+  chmod 600 "$root/user/config.json" "$root/user/state.json"
   printf '%s\n' '# Managed by Hibermachy. Do not edit.' '[Sleep]' 'HibernateDelaySec=3600s' 'HibernateOnACPower=no' > "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
   printf '%s\n' 'owner=system
 mode=600
@@ -38,6 +39,15 @@ assert_refused() {
   local expected=$1
   set +e
   result=$("$command_path" uninstall --root "$root" 2>&1)
+  code=$?
+  set -e
+  [[ $code -ne 0 ]] && [[ $result == *"$expected"* ]]
+}
+
+assert_purge_refused() {
+  local expected=$1
+  set +e
+  result=$($command_path purge --root "$root" --confirm-purge 2>&1)
   code=$?
   set -e
   [[ $code -ne 0 ]] && [[ $result == *"$expected"* ]]
@@ -97,5 +107,54 @@ rm "$root/plugin/manifest.json"
 missing_checkout=$("$command_path" uninstall --root "$root")
 node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.checkout!=="removed") process.exit(1)' "$missing_checkout"
 [[ -e "$root/user/config.json" && -e "$root/user/state.json" ]]
+
+seed
+retained=$("$command_path" purge --root "$root" --cancel-purge)
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.operation!=="uninstall" || x.purge!=="retained" || !x.retained.userConfiguration || !x.retained.outcomeHistory || !Array.isArray(x.purgeScopes) || x.purgeScopes.length!==2) process.exit(1)' "$retained"
+[[ -e "$root/user/config.json" && -e "$root/user/state.json" && ! -e "$root/plugin" && ! -e "$root/helper/package" ]]
+
+seed
+set +e
+needs_confirmation=$("$command_path" purge --root "$root" 2>&1)
+needs_confirmation_code=$?
+set -e
+[[ $needs_confirmation_code -ne 0 && $needs_confirmation == *'HBR-PURGE-CONFIRMATION-REQUIRED'* ]]
+[[ -e "$root/user/config.json" && -e "$root/user/state.json" && ! -e "$root/plugin" && ! -e "$root/helper/package" ]]
+
+seed
+purged=$("$command_path" purge --root "$root" --confirm-purge)
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.operation!=="purge" || x.purge!=="removed" || x.finalInventory.userConfiguration!=="absent" || x.finalInventory.outcomeHistory!=="absent" || x.purgeScopes.length!==2) process.exit(1)' "$purged"
+[[ ! -e "$root/user/config.json" && ! -e "$root/user/state.json" ]]
+[[ -e "$root/activation.json" && $(cat "$root/activation.json") == '{"enabled":false}' ]]
+rerun_purge=$("$command_path" purge --root "$root" --confirm-purge)
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.purge!=="removed" || x.finalInventory.userConfiguration!=="absent") process.exit(1)' "$rerun_purge"
+
+seed
+mkdir -p "$root/outside"
+printf '%s\n' 'outside sentinel' > "$root/outside/sentinel"
+rm "$root/user/config.json"
+ln -s "$root/outside/sentinel" "$root/user/config.json"
+assert_purge_refused HBR-PURGE-UNSAFE-PATH
+[[ -L "$root/user/config.json" && -e "$root/outside/sentinel" && -e "$root/user/state.json" ]]
+
+seed
+chmod 773 "$root/user"
+rm "$root/user/state.json"
+printf '%s\n' '{"version":1}' > "$root/user/state.json"
+chmod 666 "$root/user/state.json"
+chmod 755 "$root/user"
+assert_purge_refused HBR-PURGE-UNSAFE-PATH
+[[ -e "$root/user/config.json" && -e "$root/user/state.json" ]]
+
+seed
+printf '%s\n' 'after=purge-config' > "$root/interrupt"
+assert_purge_refused HBR-LIFECYCLE-INTERRUPTED
+[[ ! -e "$root/user/config.json" && -e "$root/user/state.json" ]]
+
+seed
+rm "$root/user/state.json"
+purged_partial=$("$command_path" purge --root "$root" --confirm-purge)
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.purge!=="removed" || x.finalInventory.outcomeHistory!=="absent") process.exit(1)' "$purged_partial"
+[[ ! -e "$root/user/config.json" && ! -e "$root/user/state.json" ]]
 
 printf '%s\n' 'HBR-CHK-LIFECYCLE-007 uninstall reset-before-removal, fail-closed journeys, retention, and rerun'
