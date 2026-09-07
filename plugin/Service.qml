@@ -170,10 +170,15 @@ Item {
     return outcomes.length ? outcomes[outcomes.length - 1] : null
   }
 
+  function latestOutcomeIsActionable(outcome): bool {
+    return !!outcome && (outcome.outcome === "Failed" || outcome.outcome === "Indeterminate")
+      && !!outcome.attemptId && !!lastSubmission && outcome.attemptId === lastSubmission.attemptId
+  }
+
   function heroStatus(): string {
     if (executionInProgress) return "Active sleep transaction"
     var outcome = latestOutcome()
-    if (outcome && (outcome.outcome === "Failed" || outcome.outcome === "Indeterminate"))
+    if (latestOutcomeIsActionable(outcome))
       return outcome.outcome === "Failed" ? "Action failed" : "Outcome indeterminate"
     if (manualReadiness(lastObservation) !== "ready"
       && (lastObservation.observationFailed || (!lastObservation.stagedSleepExecutable && !lastObservation.suspendExecutable)

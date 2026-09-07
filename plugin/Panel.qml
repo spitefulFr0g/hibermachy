@@ -99,12 +99,25 @@ Panel {
     editIdleDelaySeconds(draftIdleDelaySeconds)
     var dirtyState = draftDirty
     draftDirty = wasDirty
+    var authStart = focusIndex
+    service.setSystemPolicyFixture('{"authorization":"cancelled"}')
+    service.editSystemPolicyDraft(draftHibernateDelaySeconds, draftHibernateOnAcPower)
+    ask("apply", "Test authentication cancellation leaves requested policy unchanged.")
+    confirmAction()
+    var authenticationCancellation = false
+    try { authenticationCancellation = JSON.parse(actionResult).reasonCode === "HBR-SYSTEM-POLICY-AUTH-CANCELLED" }
+    catch (error) { authenticationCancellation = false }
+    service.setSystemPolicyFixture('{"authorization":"authorized"}')
     return JSON.stringify({ accepted: true, forward: forward, reverse: reverse,
       confirmationOpened: confirmationOpened, cancellationClosed: confirmationKind === "",
       focusRestored: lastRestoredFocusIndex === start, accessibleNames: accessibleNames,
       dirtyState: dirtyState, disabledState: !saveButton.enabled,
       statusAnnouncement: !!(statusSnapshot && statusSnapshot.statusAnnouncement),
-      nonColorStatus: statusSummary.indexOf("Automatic staged sleep:") >= 0 })
+      nonColorStatus: statusSummary.indexOf("Automatic staged sleep:") >= 0,
+      authenticationCancellation: authenticationCancellation,
+      authenticationFocusRestored: lastRestoredFocusIndex === authStart,
+      scaledLayout: Style.space(32),
+      contrastRoles: Color.foreground !== Color.background && Color.foreground !== Color.muted })
   }
   function cancelConfirmation() {
     confirmationKind = ""

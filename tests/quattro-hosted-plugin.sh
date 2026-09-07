@@ -12,6 +12,7 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=missing HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HBR_TEST_THEME=high-contrast HBR_TEST_SCALE=1.5 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_OPEN_BOOT=prior-boot "$0"
   exit 0
 fi
@@ -65,6 +66,13 @@ trap cleanup EXIT
 
 mkdir -p "$test_root/.config/omarchy/plugins"
 mkdir -p "$test_root/.local/state/hibermachy"
+mkdir -p "$test_root/.local/state/omarchy/current/theme"
+if [[ "${HBR_TEST_THEME:-}" == high-contrast ]]; then
+  cp /usr/share/omarchy/themes/white/colors.toml "$test_root/.local/state/omarchy/current/theme/colors.toml"
+else
+  cp /usr/share/omarchy/themes/matte-black/colors.toml "$test_root/.local/state/omarchy/current/theme/colors.toml"
+fi
+printf '[font]\nbase-size=12\n[spacing]\nscale=%s\n' "${HBR_TEST_SCALE:-1}" > "$test_root/.local/state/omarchy/current/theme/shell.toml"
 if [[ -n "${HIBERMACHY_SEED_OPEN_BOOT:-}" ]]; then
   node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({schemaVersion:1,openAttempt:{attemptId:"prior-attempt",origin:"manual",selectedMode:"suspend-then-hibernate",bootId:process.argv[2]},terminalOutcomes:[],suppressionSummaries:[],notificationFingerprints:[]})+"\n")' "$test_root/.local/state/hibermachy/outcomes.json" "$HIBERMACHY_SEED_OPEN_BOOT"
 fi
@@ -224,7 +232,14 @@ status=$(status_json)
 printf '%s\n' 'HBR-CHK-PANEL-002 panel summon and cancellation return through the hosted shell seam'
 call shell summon "$plugin_id" '{}' >/dev/null
 journey=$(call dev.hibermachy.panel-test accessibilityJourney)
-node -e 'const j=JSON.parse(process.argv[1]); if (!j.accepted || !j.forward || !j.reverse || !j.confirmationOpened || !j.cancellationClosed || !j.focusRestored || !j.accessibleNames || !j.dirtyState || !j.disabledState || !j.statusAnnouncement || !j.nonColorStatus) process.exit(1)' "$journey"
+node -e '
+  const j=JSON.parse(process.argv[1]);
+  const highContrast = process.argv[2] === "high-contrast";
+  if (!j.accepted || !j.forward || !j.reverse || !j.confirmationOpened || !j.cancellationClosed || !j.focusRestored
+    || !j.accessibleNames || !j.dirtyState || !j.disabledState || !j.statusAnnouncement || !j.nonColorStatus
+    || !j.authenticationCancellation || !j.authenticationFocusRestored || !j.contrastRoles
+    || !(Number(j.scaledLayout) > (highContrast ? 32 : 0))) process.exit(1)
+' "$journey" "${HBR_TEST_THEME:-}"
 call shell hide "$plugin_id"
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
