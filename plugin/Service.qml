@@ -18,13 +18,36 @@ Item {
   property string lastObservedPolicyText: ""
   property bool persistenceFailureLatched: false
   property string policyReasonCode: "HBR-POLICY-LOADING"
+  property var systemPolicyDraft: ({
+    hibernateDelaySeconds: 7200,
+    hibernateOnAcPower: false,
+    scope: "machine-wide"
+  })
+  property var requestedSystemPolicy: null
+  property var effectiveSystemPolicy: null
+  property var systemPolicyProvenance: []
+  property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
+  property bool systemPolicyBusy: false
+  property var systemPolicyFixture: ({
+    authorization: Quickshell.env("HBR_TEST_MODE") === "1" ? "authorized" : "unavailable",
+    helper: Quickshell.env("HBR_TEST_MODE") === "1" ? "accepted" : "unavailable",
+    readback: Quickshell.env("HBR_TEST_MODE") === "1" ? "available" : "unavailable",
+    effective: null,
+    provenance: []
+  })
 
   readonly property var statusSnapshot: ({
     pluginActivation: "active",
     automaticPolicyEnablement: policyAccepted && policySnapshot && policySnapshot.automaticPolicyEnabled ? "enabled" : "disabled",
     automaticStagedSleepReadiness: "not-ready",
     reasonCode: policyReasonCode,
-    userPolicy: policySnapshot
+    userPolicy: policySnapshot,
+    systemPolicyDraft: systemPolicyDraft,
+    requestedSystemPolicy: requestedSystemPolicy,
+    effectiveSystemPolicy: effectiveSystemPolicy,
+    systemPolicyProvenance: systemPolicyProvenance,
+    systemPolicyReasonCode: systemPolicyReasonCode,
+    systemPolicyReadiness: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready"
   })
 
   function safeDefaults(revision) {
@@ -188,6 +211,135 @@ Item {
   function status(): string { return JSON.stringify(statusSnapshot) }
   function userPolicy(): string { return JSON.stringify(policySnapshot || {}) }
 
+  function systemPolicyReceipt(accepted, reasonCode, extra) {
+    var receipt = { accepted: accepted, reasonCode: reasonCode,
+      requestedSystemPolicy: requestedSystemPolicy, effectiveSystemPolicy: effectiveSystemPolicy,
+      systemPolicyProvenance: systemPolicyProvenance }
+    if (extra) for (var key in extra) receipt[key] = extra[key]
+    return JSON.stringify(receipt)
+  }
+
+  function validSystemPolicy(policy) {
+    return policy && Number.isSafeInteger(policy.hibernateDelaySeconds)
+      && policy.hibernateDelaySeconds >= 900 && policy.hibernateDelaySeconds <= 604800
+      && typeof policy.hibernateOnAcPower === "boolean"
+  }
+
+  function editSystemPolicyDraft(delaySeconds, onAcPower) {
+    var next = { hibernateDelaySeconds: delaySeconds, hibernateOnAcPower: onAcPower,
+      scope: "machine-wide" }
+    if (!validSystemPolicy(next)) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
+    systemPolicyDraft = next
+    return systemPolicyReceipt(true, "HBR-SYSTEM-POLICY-DRAFT-UPDATED")
+  }
+
+  function reviewSystemPolicy() {
+    if (!validSystemPolicy(systemPolicyDraft)) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
+    return systemPolicyReceipt(true, "HBR-SYSTEM-POLICY-REVIEW", { pair: systemPolicyDraft,
+      review: "The authenticated mutation will replace both machine-wide values together." })
+  }
+
+  function applySystemPolicy() {
+    if (systemPolicyBusy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
+    if (!validSystemPolicy(systemPolicyDraft)) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
+    systemPolicyBusy = true
+    var fixture = systemPolicyFixture || {}
+    var authorization = fixture.authorization || "authorized"
+    if (authorization === "unavailable") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-UNAVAILABLE"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
+    }
+    if (authorization === "cancelled") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-AUTH-CANCELLED"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
+    }
+    if (authorization === "denied") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-AUTH-DENIED"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
+    }
+    if (fixture.helper && fixture.helper !== "accepted") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-HELPER-REJECTED"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
+    }
+    if (fixture.write === "failed") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-WRITE-FAILED"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-WRITE-FAILED")
+    }
+    if (fixture.readback === "unavailable") {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE")
+    }
+    var requested = { hibernateDelaySeconds: systemPolicyDraft.hibernateDelaySeconds,
+      hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide" }
+    var readback = fixture.readbackPolicy || requested
+    if (fixture.readback === "contradictory")
+      readback = { hibernateDelaySeconds: requested.hibernateDelaySeconds + 1,
+        hibernateOnAcPower: requested.hibernateOnAcPower }
+    if (readback.hibernateDelaySeconds !== requested.hibernateDelaySeconds
+      || readback.hibernateOnAcPower !== requested.hibernateOnAcPower) {
+      systemPolicyBusy = false
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-CONTRADICTORY"
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-CONTRADICTORY")
+    }
+    requestedSystemPolicy = requested
+    effectiveSystemPolicy = fixture.effective || requested
+    systemPolicyProvenance = fixture.provenance || []
+    systemPolicyReasonCode = effectiveSystemPolicy.hibernateDelaySeconds === requested.hibernateDelaySeconds
+      && effectiveSystemPolicy.hibernateOnAcPower === requested.hibernateOnAcPower
+      ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    systemPolicyBusy = false
+    return systemPolicyReceipt(true, systemPolicyReasonCode, { pair: requested })
+  }
+
+  function resetSystemPolicy() {
+    if (systemPolicyBusy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
+    var fixture = systemPolicyFixture || {}
+    systemPolicyBusy = true
+    if (fixture.authorization === "unavailable") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
+    }
+    if (fixture.authorization === "cancelled") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
+    }
+    if (fixture.authorization === "denied") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
+    }
+    if (fixture.helper && fixture.helper !== "accepted") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
+    }
+    if (fixture.write === "failed") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-WRITE-FAILED")
+    }
+    if (fixture.readback === "unavailable") {
+      systemPolicyBusy = false
+      return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE")
+    }
+    requestedSystemPolicy = null
+    effectiveSystemPolicy = null
+    systemPolicyProvenance = []
+    systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET"
+    systemPolicyBusy = false
+    return systemPolicyReceipt(true, "HBR-SYSTEM-POLICY-RESET")
+  }
+
+  function setSystemPolicyFixture(fixtureJson) {
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
+    try { systemPolicyFixture = JSON.parse(String(fixtureJson)) }
+    catch (error) { return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-FIXTURE-MALFORMED") }
+    return systemPolicyReceipt(true, "HBR-SYSTEM-POLICY-FIXTURE-SET")
+  }
+
   Process {
     id: ensurePolicyDirectory
     command: ["mkdir", "-p", root.policyDirectory]
@@ -235,6 +387,12 @@ Item {
     function userPolicy(): string { return root.userPolicy() }
     function saveUserPolicy(requestJson: string): string { return root.saveUserPolicy(requestJson) }
     function resetUserPolicy(): string { return root.resetUserPolicy() }
+    function systemPolicy(): string { return JSON.stringify(root.statusSnapshot) }
+    function editSystemPolicyDraft(delaySeconds: int, onAcPower: bool): string { return root.editSystemPolicyDraft(delaySeconds, onAcPower) }
+    function reviewSystemPolicy(): string { return root.reviewSystemPolicy() }
+    function applySystemPolicy(): string { return root.applySystemPolicy() }
+    function resetSystemPolicy(): string { return root.resetSystemPolicy() }
+    function setSystemPolicyFixture(fixtureJson: string): string { return root.setSystemPolicyFixture(fixtureJson) }
     function requestManualStagedSleep(): string { return JSON.stringify({ simulated: true, policyChanged: false }) }
   }
 }

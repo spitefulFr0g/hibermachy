@@ -25,7 +25,7 @@ mkdir -p "$test_root/.config/omarchy/plugins"
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
 
-HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
+HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" HBR_TEST_MODE=1 OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
 host_pid=$!
 
 call() {
@@ -112,6 +112,16 @@ assert_disabled_status() {
   ' "$1"
 }
 
+assert_system_policy_draft() {
+  node -e '
+    const status = JSON.parse(process.argv[1]);
+    const draft = status.systemPolicyDraft;
+    if (!draft || draft.hibernateDelaySeconds !== 7200 || draft.hibernateOnAcPower !== false
+      || draft.scope !== "machine-wide" || status.requestedSystemPolicy !== null
+      || status.effectiveSystemPolicy !== null) process.exit(1);
+  ' "$1"
+}
+
 for _ in $(seq 1 50); do
   if call shell ping >/dev/null 2>&1 && call shell listPlugins >/dev/null 2>&1; then break; fi
   sleep 0.1
@@ -130,6 +140,24 @@ call shell setPluginEnabled "$plugin_id" true | grep -qx 'ok'
 status=$(status_json)
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
+printf '%s\n' 'HBR-CHK-SYSTEM-001 system policy starts as an independent unpersisted draft'
+assert_system_policy_draft "$status"
+
+printf '%s\n' 'HBR-CHK-SYSTEM-002 apply reviews and commits the complete pair'
+call "$plugin_id" editSystemPolicyDraft 9000 false | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if (!r.accepted) process.exit(1)'
+call "$plugin_id" reviewSystemPolicy | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if (!r.accepted || r.pair.hibernateDelaySeconds!==9000 || r.pair.hibernateOnAcPower!==false) process.exit(1)'
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"authorized","helper":"accepted","readback":"available","effective":{"hibernateDelaySeconds":9000,"hibernateOnAcPower":false},"provenance":["/etc/systemd/sleep.conf.d/90-hibermachy.conf"]}' >/dev/null
+receipt=$(call "$plugin_id" applySystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-APPLIED") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (!s.requestedSystemPolicy || !s.effectiveSystemPolicy || s.systemPolicyProvenance.length!==1) process.exit(1)' "$status"
+
+printf '%s\n' 'HBR-CHK-SYSTEM-003 authentication cancellation does not replay or mutate requested policy'
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"cancelled","helper":"accepted","readback":"available"}' >/dev/null
+receipt=$(call "$plugin_id" applySystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-AUTH-CANCELLED") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.requestedSystemPolicy.hibernateDelaySeconds!==9000) process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-POLICY-001 first load persists safe defaults'
 policy=$(user_policy_json)

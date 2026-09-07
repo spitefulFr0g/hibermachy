@@ -15,6 +15,9 @@ Panel {
   property int draftIdleDelaySeconds: 1800
   property int draftBaseRevision: 0
   property bool draftDirty: false
+  property int draftHibernateDelaySeconds: 7200
+  property bool draftHibernateOnAcPower: false
+  property bool systemDraftDirty: false
 
   function open() {
     refresh()
@@ -26,6 +29,10 @@ Panel {
     draftAutomaticPolicyEnabled = service.policySnapshot.automaticPolicyEnabled
     draftIdleDelaySeconds = service.policySnapshot.idleDelaySeconds
     draftBaseRevision = service.policySnapshot.revision
+    if (!systemDraftDirty) {
+      draftHibernateDelaySeconds = service.systemPolicyDraft.hibernateDelaySeconds
+      draftHibernateOnAcPower = service.systemPolicyDraft.hibernateOnAcPower
+    }
   }
 
   function editAutomaticPolicyEnabled(enabled) {
@@ -50,6 +57,34 @@ Panel {
     }
     draftDirty = !receipt.accepted
     return JSON.stringify(receipt)
+  }
+
+  function editSystemPolicy(delaySeconds, onAcPower) {
+    draftHibernateDelaySeconds = delaySeconds
+    draftHibernateOnAcPower = onAcPower
+    systemDraftDirty = true
+  }
+
+  function reviewSystemPolicy() {
+    if (!service) return JSON.stringify({ accepted: false, reasonCode: "HBR-SYSTEM-POLICY-UNAVAILABLE" })
+    return service.editSystemPolicyDraft(draftHibernateDelaySeconds, draftHibernateOnAcPower)
+      && service.reviewSystemPolicy()
+  }
+
+  function applySystemPolicy() {
+    if (!service) return JSON.stringify({ accepted: false, reasonCode: "HBR-SYSTEM-POLICY-UNAVAILABLE" })
+    var draftReceipt = JSON.parse(service.editSystemPolicyDraft(draftHibernateDelaySeconds, draftHibernateOnAcPower))
+    if (!draftReceipt.accepted) return JSON.stringify(draftReceipt)
+    var review = JSON.parse(service.reviewSystemPolicy())
+    if (!review.accepted) return JSON.stringify(review)
+    var receipt = JSON.parse(service.applySystemPolicy())
+    if (receipt.accepted) systemDraftDirty = false
+    return JSON.stringify(receipt)
+  }
+
+  function resetSystemPolicy() {
+    if (!service) return JSON.stringify({ accepted: false, reasonCode: "HBR-SYSTEM-POLICY-UNAVAILABLE" })
+    return service.resetSystemPolicy()
   }
 
   onStatusSnapshotChanged: refresh()
@@ -112,6 +147,67 @@ Panel {
         text: root.statusSnapshot
           ? "Not ready: automatic staged sleep is " + root.statusSnapshot.automaticPolicyEnablement + "."
           : "Status is unavailable."
+        color: Color.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      PanelSeparator { width: parent.width }
+
+      PanelSectionHeader { text: "System policy" }
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: "Machine-wide: hibernate delay and hibernation while plugged in affect every user and suspend-then-hibernate caller. Changes remain a draft until authenticated Apply system policy."
+        color: Color.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
+
+      NumberField {
+        label: "Hibernate delay (seconds)"
+        value: root.draftHibernateDelaySeconds
+        from: 900
+        to: 604800
+        stepSize: 1
+        onModified: function(value) { root.editSystemPolicy(value, root.draftHibernateOnAcPower) }
+      }
+
+      Toggle {
+        width: parent.width
+        label: "Hibernate while plugged in"
+        description: "Machine-wide system policy draft."
+        checked: root.draftHibernateOnAcPower
+        onClicked: root.editSystemPolicy(root.draftHibernateDelaySeconds, !root.draftHibernateOnAcPower)
+      }
+
+      Button {
+        text: "Apply system policy"
+        bordered: true
+        focusable: true
+        enabled: root.systemDraftDirty
+        onClicked: root.applySystemPolicy()
+      }
+
+      Button {
+        text: "Reset requested system policy"
+        bordered: true
+        focusable: true
+        enabled: root.statusSnapshot && root.statusSnapshot.requestedSystemPolicy !== null
+        onClicked: root.resetSystemPolicy()
+      }
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: root.statusSnapshot
+          ? "Requested: " + JSON.stringify(root.statusSnapshot.requestedSystemPolicy)
+            + "\nEffective: " + JSON.stringify(root.statusSnapshot.effectiveSystemPolicy)
+            + "\n" + root.statusSnapshot.systemPolicyReasonCode
+          : "System policy unavailable."
         color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.body
