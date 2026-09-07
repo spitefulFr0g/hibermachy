@@ -32,6 +32,15 @@ function fixtureValue(file, key) {
   const match = read(file).match(new RegExp(`(?:^|\\s)${key}=([^\\s]+)`));
   return match ? match[1] : "";
 }
+function writeJson(file, value) {
+  fs.writeFileSync(path.join(root, file), `${JSON.stringify(value)}\n`);
+}
+function lifecycleState() {
+  try { return JSON.parse(read("lifecycle-state.json")); } catch { return {}; }
+}
+function recordLifecycle(operation, phase, extra = {}) {
+  writeJson("lifecycle-state.json", { schemaVersion: 1, operation, phase, ...extra });
+}
 function interrupted(step) {
   return fixtureValue("interrupt", "after") === step;
 }
@@ -47,8 +56,59 @@ function recognizedPolicy(file) {
     /^HibernateOnACPower=(yes|no)$/.test(lines[3]) && lines[4] === "" &&
     Number(lines[2].slice("HibernateDelaySec=".length, -1)) >= 900 && Number(lines[2].slice("HibernateDelaySec=".length, -1)) <= 604800;
 }
+function compatibleManifest(file = "plugin/manifest.json") {
+  try {
+    const value = JSON.parse(read(file));
+    if (value.id !== "dev.hibermachy" || value.schemaVersion !== 1 ||
+        !value.protocol || !Number.isInteger(value.protocol.min) || !Number.isInteger(value.protocol.max) ||
+        value.protocol.min > value.protocol.max) throw new Error();
+    return value;
+  } catch { throw new Error("HBR-RECOVERY-CHECKOUT-INCOMPATIBLE"); }
+}
+function recoverCheckout(previousState = lifecycleState()) {
+  if (regular("plugin/manifest.json")) {
+    compatibleManifest();
+    return "present";
+  }
+  if (previousState.operation === "uninstall" && previousState.phase === "completed") return "already-removed";
+  if (!fixtureOk("native-plugin-add", ["accepted=true", "reviewed=true", "disabled=true"]) ||
+      !regular("recovered-plugin-manifest.json")) throw new Error("HBR-RECOVERY-NATIVE-ADD-REQUIRED");
+  const checkoutPath = lstat("plugin");
+  if (checkoutPath && (checkoutPath.isSymbolicLink() || !checkoutPath.isDirectory())) throw new Error("HBR-RECOVERY-CHECKOUT-UNSAFE");
+  const plugin = compatibleManifest("recovered-plugin-manifest.json");
+  fs.mkdirSync(path.join(root, "plugin"), { recursive: true });
+  fs.copyFileSync(path.join(root, "recovered-plugin-manifest.json"), path.join(root, "plugin/manifest.json"));
+  writeJson("activation.json", { enabled: false });
+  event("checkout-readded");
+  recordLifecycle("uninstall", "checkout-readded", { recovery: { checkout: "re-added" } });
+  return "re-added";
+}
+function protocolOverlaps(plugin, helperProtocol) {
+  const match = helperProtocol.match(/^protocol-min=(\d+) protocol-max=(\d+)$/);
+  if (!match) return false;
+  const min = Number(match[1]), max = Number(match[2]);
+  return min <= max && plugin.protocol.min <= plugin.protocol.max && min <= plugin.protocol.max && max >= plugin.protocol.min;
+}
+function recoverHelper(plugin, policyFile) {
+  if (!recognizedPolicy(policyFile)) return "not-needed";
+  const ownedPackage = regular("helper/package") && regular("helper/package.owner") &&
+    read("helper/package.owner") === "owner=pacman\n" && /^package=hibermachy-helper version=\d+\.\d+\.\d+\n$/.test(read("helper/package"));
+  if (regular("helper/package") && !ownedPackage) throw new Error("HBR-RECOVERY-HELPER-UNSAFE");
+  if (ownedPackage && protocolOverlaps(plugin, read("helper/protocol").trim())) return "present";
+  if (regular("helper/package") && regular("helper/protocol")) throw new Error("HBR-RECOVERY-PROTOCOL-MISMATCH");
+  if (!fixtureOk("helper-build", ["success=true", "user=unprivileged", "source=immutable", "signature=valid", "checksum=valid"])) throw new Error("HBR-RECOVERY-HELPER-BUILD-REQUIRED");
+  if (!fixtureOk("package-install", ["success=true", "authorization=interactive"])) throw new Error("HBR-RECOVERY-PACKAGE-INSTALL-REQUIRED");
+  fs.mkdirSync(path.join(root, "helper"), { recursive: true });
+  fs.writeFileSync(path.join(root, "helper/package"), `package=hibermachy-helper version=${plugin.version}\n`);
+  fs.writeFileSync(path.join(root, "helper/package.owner"), "owner=pacman\n");
+  fs.writeFileSync(path.join(root, "helper/protocol"), `protocol-min=${plugin.protocol.min} protocol-max=${plugin.protocol.max}\n`);
+  event("helper-reinstalled");
+  recordLifecycle("uninstall", "helper-reinstalled", { recovery: { helper: "reinstalled" } });
+  return "reinstalled";
+}
 function removeMenuEntries() {
   const menuName = regular("menu.jsonc") ? "menu.jsonc" : "menu.json";
+  if (!exists(menuName)) return "unchanged";
   const menuPath = path.join(root, menuName);
   if (fs.lstatSync(menuPath).isSymbolicLink()) throw new Error("HBR-MENU-INACCESSIBLE");
   if (!regular(path.relative(root, menuPath))) throw new Error("HBR-MENU-MISSING");
@@ -72,10 +132,23 @@ function uninstall() {
   if (!owner) return uninstallFail("HBR-LIFECYCLE-OWNER-UNRECOGNIZED", "inventory");
   const policyFile = "etc/systemd/sleep.conf.d/90-hibermachy.conf";
   const policyPath = path.join(root, policyFile);
+  const recovery = arguments_.includes("--recover") || command === "purge";
+  const previousLifecycleState = lifecycleState();
+  recordLifecycle("uninstall", "started", { recoveryRequested: recovery });
+  let recoveryResult = { checkout: "not-needed", helper: "not-needed" };
+  if (recovery && !regular("plugin/manifest.json")) recoveryResult.checkout = recoverCheckout(previousLifecycleState);
+  const plugin = regular("plugin/manifest.json") ? compatibleManifest() : undefined;
+  if (recognizedPolicy(policyFile) && (!regular("helper/package") || !regular("helper/protocol"))) {
+    if (!recovery || !plugin) throw new Error("HBR-RECOVERY-HELPER-REQUIRED");
+    recoveryResult.helper = recoverHelper(plugin, policyFile);
+  } else if (recognizedPolicy(policyFile) && plugin) {
+    recoveryResult.helper = recoverHelper(plugin, policyFile);
+  }
   if (regular("activation.json") && JSON.parse(read("activation.json")).enabled === true) {
     if (!fixtureOk("native-disable", ["success=true"])) return uninstallFail("HBR-LIFECYCLE-DISABLE-FAILED", "disable");
     fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":false}\n');
   }
+  recordLifecycle("uninstall", "disabled", { recovery: recoveryResult });
   event("disable");
   if (interrupted("disable")) return uninstallFail("HBR-LIFECYCLE-INTERRUPTED", "disable");
 
@@ -93,6 +166,7 @@ function uninstall() {
     if (exists(metadata)) fs.unlinkSync(path.join(root, metadata));
   } else if (regular(policyFile)) return uninstallFail("HBR-SYSTEM-POLICY-RESET-AUTH-UNAVAILABLE", "policy-reset-authentication");
   event("policy-reset-verified-absent");
+  recordLifecycle("uninstall", "policy-reset-verified-absent", { recovery: recoveryResult });
   if (interrupted("policy-reset")) return uninstallFail("HBR-LIFECYCLE-INTERRUPTED", "policy-reset");
 
   event("package-removal-requested");
@@ -101,6 +175,7 @@ function uninstall() {
   if (exists("helper/package.owner")) fs.unlinkSync(path.join(root, "helper/package.owner"));
   if (exists("helper/protocol")) fs.unlinkSync(path.join(root, "helper/protocol"));
   event("package-removed");
+  recordLifecycle("uninstall", "package-removed", { recovery: recoveryResult });
   if (interrupted("package-removal")) return uninstallFail("HBR-LIFECYCLE-INTERRUPTED", "package-removal");
   if (regular(policyFile)) return uninstallFail("HBR-SYSTEM-POLICY-ABSENCE-INDETERMINATE", "policy-verification");
   const menu = removeMenuEntries();
@@ -111,9 +186,10 @@ function uninstall() {
     fs.rmSync(path.join(root, "plugin"), { recursive: true, force: false });
   }
   event("checkout-removed");
+  recordLifecycle("uninstall", "completed", { recovery: recoveryResult });
   return {
     kind: "accepted", operation: "uninstall", installationOwner: read("installation-owner").trim(), scope,
-    activation: "disabled", policyReset: "verified-absent", helper: "removed", menu, checkout: "removed",
+    activation: "disabled", policyReset: "verified-absent", helper: "removed", menu, checkout: "removed", recovery: recoveryResult,
     retained: { userConfiguration: exists("user/config.json"), outcomeHistory: exists("user/state.json") }, inventory: inventory()
   };
 }
@@ -251,6 +327,7 @@ function manifest() {
   catch { throw new Error("HBR-CHECKOUT-INCOMPATIBLE"); }
 }
 function setup() {
+  recordLifecycle("setup", "started");
   const plugin = manifest();
   if (!fixtureOk("native-plugin-review", ["reviewed=true"])) throw new Error("HBR-LIFECYCLE-NATIVE-REVIEW-REQUIRED");
   if (!fixtureOk("quattro-contract", ["compatible=true"])) throw new Error("HBR-QUATTRO-CONTRACT-INCOMPATIBLE");
@@ -260,10 +337,13 @@ function setup() {
   fs.writeFileSync(path.join(root, "helper/package"), "package=hibermachy-helper version=0.1.0\n");
   fs.writeFileSync(path.join(root, "helper/package.owner"), "owner=pacman\n");
   fs.writeFileSync(path.join(root, "helper/protocol"), `protocol-min=${plugin.protocol.min} protocol-max=${plugin.protocol.max}\n`);
+  recordLifecycle("setup", "helper-installed");
   const menu = reconcileMenu();
+  recordLifecycle("setup", "menu-reconciled");
   if (!fixtureOk("probes", ["compatible=true"])) throw new Error("HBR-INTEGRATION-PROBES-INCOMPLETE");
   if (!exists("activation.json")) fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":false}\n');
   const activation = JSON.parse(read("activation.json")).enabled ? "enabled" : "disabled";
+  recordLifecycle("setup", "completed", { activation });
   return {
     kind: "accepted", operation: "setup", installationOwnerModel: "one Omarchy desktop user per machine",
     activation, menu, policyMutation: false,
@@ -273,11 +353,86 @@ function setup() {
 }
 function activate(confirm) {
   manifest();
-  if (!confirm) return { kind: "declined", operation: "activation", activation: "disabled", policyMutation: false };
+  if (!confirm) {
+    recordLifecycle("activation", "declined");
+    return { kind: "declined", operation: "activation", activation: "disabled", policyMutation: false };
+  }
   fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":true}\n');
+  recordLifecycle("activation", "completed", { activation: "enabled" });
   return { kind: "accepted", operation: "activation", activation: "enabled", policyMutation: false };
 }
 
+function activation() {
+  try {
+    const value = JSON.parse(read("activation.json"));
+    if (typeof value.enabled !== "boolean") throw new Error();
+    return value.enabled;
+  } catch { throw new Error("HBR-ACTIVATION-STATE-INVALID"); }
+}
+function updateIntent() {
+  if (!regular("update-intent.json")) {
+    const intent = { schemaVersion: 1, priorActivation: activation() ? "enabled" : "disabled", phase: "recorded" };
+    writeJson("update-intent.json", intent);
+    return intent;
+  }
+  try {
+    const intent = JSON.parse(read("update-intent.json"));
+    if (intent.schemaVersion !== 1 || !["enabled", "disabled"].includes(intent.priorActivation) || typeof intent.phase !== "string") throw new Error();
+    return intent;
+  } catch { throw new Error("HBR-UPDATE-INTENT-INVALID"); }
+}
+function update() {
+  let intent = updateIntent();
+  const priorActivation = intent.priorActivation;
+  const phase = (next) => { intent = { ...intent, phase: next }; writeJson("update-intent.json", intent); recordLifecycle("update", next, { priorActivation }); };
+  manifest();
+  if (intent.phase === "recorded") {
+    if (activation()) writeJson("activation.json", { enabled: false });
+    phase("disabled");
+  }
+  if (!["native-update-reviewed", "checkout-updated", "helper-built", "helper-upgraded", "menu-reconciled", "probes-rerun", "completed"].includes(intent.phase)) {
+    if (!fixtureOk("native-plugin-update", ["reviewed=true"])) throw new Error("HBR-NATIVE-UPDATE-REVIEW-REQUIRED");
+    if (read("native-plugin-update").includes("autoAccept=true")) throw new Error("HBR-NATIVE-UPDATE-AUTO-ACCEPT");
+    phase("native-update-reviewed");
+  }
+  if (["native-update-reviewed", "disabled"].includes(intent.phase)) {
+    if (!regular("updated-plugin-manifest.json")) throw new Error("HBR-NATIVE-UPDATE-INCOMPLETE");
+    const updated = compatibleManifest("updated-plugin-manifest.json");
+    fs.copyFileSync(path.join(root, "updated-plugin-manifest.json"), path.join(root, "plugin/manifest.json"));
+    phase("checkout-updated");
+    void updated;
+  }
+  const plugin = compatibleManifest();
+  if (["checkout-updated", "native-update-reviewed"].includes(intent.phase)) {
+    if (!fixtureOk("helper-build", ["success=true", "user=unprivileged", "source=immutable", "signature=valid", "checksum=valid"])) throw new Error("HBR-HELPER-BUILD-FAILED");
+    phase("helper-built");
+  }
+  if (intent.phase === "helper-built") {
+    if (!fixtureOk("package-install", ["success=true", "authorization=interactive"])) throw new Error("HBR-PACKAGE-INSTALL-FAILED");
+    fs.mkdirSync(path.join(root, "helper"), { recursive: true });
+    fs.writeFileSync(path.join(root, "helper/package"), `package=hibermachy-helper version=${plugin.version}\n`);
+    fs.writeFileSync(path.join(root, "helper/package.owner"), "owner=pacman\n");
+    fs.writeFileSync(path.join(root, "helper/protocol"), `protocol-min=${plugin.protocol.min} protocol-max=${plugin.protocol.max}\n`);
+    phase("helper-upgraded");
+  }
+  if (["helper-upgraded", "menu-reconciled"].includes(intent.phase)) {
+    if (!fixtureOk("protocol-probe", ["compatible=true"])) throw new Error("HBR-PROTOCOL-MISMATCH");
+    if (intent.phase === "helper-upgraded") {
+      reconcileMenu();
+      phase("menu-reconciled");
+    }
+    if (interrupted("update-menu")) throw new Error("HBR-LIFECYCLE-INTERRUPTED");
+    if (!fixtureOk("probes", ["compatible=true"])) throw new Error("HBR-INTEGRATION-PROBES-INCOMPLETE");
+    phase("probes-rerun");
+  }
+  if (intent.phase === "probes-rerun") {
+    writeJson("activation.json", { enabled: priorActivation === "enabled" });
+    phase("completed");
+    fs.unlinkSync(path.join(root, "update-intent.json"));
+  }
+  return { kind: "accepted", operation: "update", activation: priorActivation, priorActivation, policyMutation: false, inventory: inventory() };
+}
+
 if (!root || !fs.existsSync(root)) fail("HBR-LIFECYCLE-ROOT-REQUIRED");
-else if (!["setup", "activate", "uninstall", "purge"].includes(command)) fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
-else { try { const result = command === "setup" ? setup() : command === "activate" ? activate(arguments_.includes("--confirm")) : command === "uninstall" ? uninstall() : purge(); process.stdout.write(JSON.stringify(result) + "\n"); if (result.kind === "refused") process.exitCode = 1; } catch (error) { fail(error instanceof Error ? error.message : "HBR-LIFECYCLE-FAILED", error?.details ?? {}); } }
+else if (!["setup", "activate", "update", "uninstall", "purge"].includes(command)) fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
+else { try { const result = command === "setup" ? setup() : command === "activate" ? activate(arguments_.includes("--confirm")) : command === "update" ? update() : command === "uninstall" ? uninstall() : purge(); process.stdout.write(JSON.stringify(result) + "\n"); if (result.kind === "refused") process.exitCode = 1; } catch (error) { fail(error instanceof Error ? error.message : "HBR-LIFECYCLE-FAILED", error?.details ?? {}); } }

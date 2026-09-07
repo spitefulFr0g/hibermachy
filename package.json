@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:quattro-hosted && npm run test:lifecycle && npm run test:lifecycle-install && npm run test:lifecycle-uninstall",
+    "test": "npm run test:quattro-hosted && npm run test:lifecycle && npm run test:lifecycle-install && npm run test:lifecycle-uninstall && npm run test:lifecycle-recovery",
     "test:quattro-hosted": "tests/quattro-hosted-plugin.sh",
     "test:lifecycle": "tests/lifecycle_status.sh",
     "test:lifecycle-install": "tests/lifecycle_install.sh",
-    "test:lifecycle-uninstall": "tests/lifecycle_uninstall.sh"
+    "test:lifecycle-uninstall": "tests/lifecycle_uninstall.sh",
+    "test:lifecycle-recovery": "tests/lifecycle_recovery.sh"
   }
 }

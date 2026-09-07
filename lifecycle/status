@@ -254,10 +254,17 @@ scopes_json=$(jq -nc \
   --argjson target "$(owned_target_state)" \
   '{checkout:$checkout, activation:$activation, menu_contribution:$menu, helper_package:$helper, helper_protocol:$protocol, automatic_policy_enablement:$automatic_policy, user_configuration_state:$user_data, requested_system_policy:$policy, owned_target:$target}')
 
+lifecycle_json=$(if [[ -r "$root/lifecycle-state.json" ]] && jq -e 'type == "object" and .schemaVersion == 1 and (.operation | type == "string") and (.phase | type == "string")' "$root/lifecycle-state.json" >/dev/null 2>&1; then
+  jq -c . "$root/lifecycle-state.json"
+else
+  jq -nc '{state:"none", recovery:[]}'
+fi)
+
 jq -n \
   --argjson owner "$owner_json" \
   --argjson scopes "$scopes_json" \
-  '{schemaVersion:1, installationOwner:$owner, scopes:$scopes,
+  --argjson lifecycle "$lifecycle_json" \
+  '{schemaVersion:1, installationOwner:$owner, lifecycle:$lifecycle, scopes:$scopes,
     glossary:[
       "plugin activation is distinct from automatic-policy enablement",
       "plugin removal removes only the user-owned checkout",

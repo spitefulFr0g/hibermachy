@@ -6,7 +6,7 @@ root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-uninstall-XXXXXX")
 trap 'rm -rf "$root"' EXIT
 
 seed() {
-  rm -f "$root/lifecycle-events" "$root/interrupt"
+  rm -f "$root/lifecycle-events" "$root/lifecycle-state.json" "$root/interrupt" "$root/native-plugin-add" "$root/recovered-plugin-manifest.json" "$root/helper-build"
   rm -rf "$root/plugin" "$root/helper" "$root/user" "$root/etc" "$root/menu.jsonc" "$root/menu.json"
   mkdir -p "$root/plugin" "$root/helper" "$root/user" "$root/etc/systemd/sleep.conf.d"
   printf '%s\n' '{"schemaVersion":1,"id":"dev.hibermachy","version":"0.1.0","protocol":{"min":1,"max":1},"kinds":["service","panel"]}' > "$root/plugin/manifest.json"
@@ -158,3 +158,39 @@ node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.purge
 [[ ! -e "$root/user/config.json" && ! -e "$root/user/state.json" ]]
 
 printf '%s\n' 'HBR-CHK-LIFECYCLE-007 uninstall reset-before-removal, fail-closed journeys, retention, and rerun'
+
+seed
+rm -rf "$root/plugin"
+printf '%s\n' 'accepted=true reviewed=true disabled=true' > "$root/native-plugin-add"
+printf '%s\n' '{"schemaVersion":1,"id":"dev.hibermachy","version":"0.1.0","protocol":{"min":1,"max":1},"kinds":["service","panel"]}' > "$root/recovered-plugin-manifest.json"
+recovered_checkout=$("$command_path" uninstall --recover --root "$root")
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.recovery.checkout!=="re-added" || x.checkout!=="removed") process.exit(1)' "$recovered_checkout"
+[[ ! -e "$root/plugin" && ! -e "$root/helper/package" && ! -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" ]]
+
+seed
+rm "$root/helper/package" "$root/helper/package.owner" "$root/helper/protocol"
+printf '%s\n' 'success=true user=unprivileged source=immutable signature=valid checksum=valid' > "$root/helper-build"
+printf '%s\n' 'success=true authorization=interactive' > "$root/package-install"
+recovered_helper=$("$command_path" uninstall --recover --root "$root")
+node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.recovery.helper!=="reinstalled" || x.helper!=="removed") process.exit(1)' "$recovered_helper"
+[[ ! -e "$root/helper/package" && ! -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" ]]
+
+seed
+rm -rf "$root/plugin"
+set +e
+unresolved=$("$command_path" uninstall --recover --root "$root" 2>&1)
+unresolved_code=$?
+set -e
+[[ $unresolved_code -ne 0 && $unresolved == *'HBR-RECOVERY-NATIVE-ADD-REQUIRED'* ]]
+[[ -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" && -e "$root/helper/package" ]]
+
+seed
+printf '%s\n' 'protocol-min=9 protocol-max=9' > "$root/helper/protocol"
+set +e
+mismatch=$("$command_path" uninstall --recover --root "$root" 2>&1)
+mismatch_code=$?
+set -e
+[[ $mismatch_code -ne 0 && $mismatch == *'HBR-RECOVERY-PROTOCOL-MISMATCH'* ]]
+[[ -e "$root/helper/package" && -e "$root/plugin" && -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" ]]
+
+printf '%s\n' 'HBR-CHK-LIFECYCLE-008 partial recovery re-add, helper reinstall, refusal, and protocol preservation'
