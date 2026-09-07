@@ -2,13 +2,20 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const [command, ...arguments_] = process.argv.slice(2);
 const rootIndex = arguments_.indexOf("--root");
 const root = rootIndex >= 0 ? arguments_[rootIndex + 1] : "";
 
+function inventory() {
+  const statusPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "status");
+  const result = spawnSync(statusPath, ["status", "--root", root], { encoding: "utf8" });
+  try { return JSON.parse(result.stdout); } catch { return { schemaVersion: 1, actionable: true, unavailable: true }; }
+}
 function fail(reasonCode, details = {}) {
-  process.stderr.write(JSON.stringify({ kind: "refused", reasonCode, ...details }) + "\n");
+  process.stderr.write(JSON.stringify({ kind: "refused", reasonCode, inventory: inventory(), ...details }) + "\n");
   process.exitCode = 1;
 }
 function read(file) { return fs.readFileSync(path.join(root, file), "utf8"); }
@@ -119,7 +126,8 @@ function setup() {
   return {
     kind: "accepted", operation: "setup", installationOwnerModel: "one Omarchy desktop user per machine",
     activation, menu, policyMutation: false,
-    scopes: { checkout: "compatible", activation, menu: menu === "unchanged" ? "compatible" : "reconciled", helper: "compatible", protocol: "compatible", userData: "retained", requestedSystemPolicy: "untouched" }
+    scopes: { checkout: "compatible", activation, menu: menu === "unchanged" ? "compatible" : "reconciled", helper: "compatible", protocol: "compatible", userData: "retained", requestedSystemPolicy: "untouched" },
+    inventory: inventory()
   };
 }
 function activate(confirm) {
