@@ -22,6 +22,7 @@ for scope in checkout activation menu_contribution helper_package helper_protoco
   assert_scope "$clean" "$scope" missing
 done
 jq -e '.installationOwner.state == "unrecognized"' <<<"$clean" >/dev/null
+jq -e '.actionable == true' <<<"$clean" >/dev/null
 assert_meaning "$clean" 'plugin removal removes only the user-owned checkout'
 assert_meaning "$clean" 'Hibermachy uninstall removes executable artifacts but retains user configuration and state'
 assert_meaning "$clean" 'Hibermachy purge additionally removes retained user configuration and state'
@@ -54,6 +55,21 @@ done
 jq -e '.installationOwner.state == "identified" and .installationOwner.artifacts == "user-owned" and .scopes.requested_system_policy.ownership == "machine-wide" and .scopes.owned_target.ownership == "machine-wide"' <<<"$complete" >/dev/null
 jq -e '.scopes.activation.enabled == false' <<<"$complete" >/dev/null
 jq -e '.scopes.automatic_policy_enablement.state == "compatible" and .scopes.automatic_policy_enablement.automaticPolicyEnablement == false' <<<"$complete" >/dev/null
+jq -e '.actionable == false' <<<"$complete" >/dev/null
+
+printf '%s\n' '# Managed by Hibermachy. Do not edit.
+[Sleep]
+HibernateDelaySec=900s
+HibernateOnACPower=yes
+' > "$fixture_root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
+custom_policy=$("$command_path" status --root "$fixture_root")
+assert_scope "$custom_policy" requested_system_policy compatible
+assert_scope "$custom_policy" owned_target compatible
+printf '%s\n' '# Managed by Hibermachy. Do not edit.
+[Sleep]
+HibernateDelaySec=3600s
+HibernateOnACPower=no
+' > "$fixture_root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
 
 printf '%s\n' '{"enabled":true}' > "$fixture_root/activation.json"
 active=$("$command_path" status --root "$fixture_root")
