@@ -28,6 +28,11 @@ Item {
   property var systemPolicyProvenance: []
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
+  readonly property string helperPath: Quickshell.env("HBR_POLICY_HELPER_PATH") || "/usr/libexec/hibermachy-policy-helper"
+  readonly property string helperLauncherPath: Quickshell.env("HBR_POLICY_HELPER_LAUNCHER") || "pkexec"
+  readonly property string effectivePolicyReaderPath: Quickshell.env("HBR_EFFECTIVE_POLICY_READER") || "/usr/bin/systemd-analyze"
+  property string systemPolicyMutation: ""
+  property var pendingRequestedSystemPolicy: null
   property var systemPolicyFixture: ({
     authorization: Quickshell.env("HBR_TEST_MODE") === "1" ? "authorized" : "unavailable",
     helper: Quickshell.env("HBR_TEST_MODE") === "1" ? "accepted" : "unavailable",
@@ -239,12 +244,65 @@ Item {
       review: "The authenticated mutation will replace both machine-wide values together." })
   }
 
+  function parseRequestedReadback(output) {
+    var match = String(output).trim().match(/^requested-delay-seconds=(\d+) requested-hibernate-on-ac=(yes|no)$/)
+    if (!match) return null
+    return { hibernateDelaySeconds: Number(match[1]), hibernateOnAcPower: match[2] === "yes", scope: "machine-wide" }
+  }
+
+  function parseEffectiveReadback(output) {
+    var text = String(output)
+    var delays = text.match(/HibernateDelaySec\s*=\s*([0-9]+)s?/g) || []
+    var acValues = text.match(/HibernateOnACPower\s*=\s*(yes|no)/g) || []
+    if (!delays.length || !acValues.length) return null
+    var delayMatch = delays[delays.length - 1].match(/([0-9]+)s?$/)
+    var acMatch = acValues[acValues.length - 1].match(/(yes|no)$/)
+    if (!delayMatch || !acMatch) return null
+    var provenance = []
+    var lines = text.split("\n")
+    for (var index = 0; index < lines.length; index++) {
+      if (lines[index].indexOf("/") === 0) provenance.push(lines[index].trim())
+    }
+    return { hibernateDelaySeconds: Number(delayMatch[1]), hibernateOnAcPower: acMatch[1] === "yes",
+      scope: "machine-wide", provenance: provenance }
+  }
+
+  function submitSystemPolicyMutation(mutation) {
+    if (systemPolicyBusy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
+    systemPolicyBusy = true
+    systemPolicyMutation = mutation
+    pendingRequestedSystemPolicy = mutation === "apply" ? {
+      hibernateDelaySeconds: systemPolicyDraft.hibernateDelaySeconds,
+      hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide"
+    } : null
+    helperProcess.command = mutation === "apply"
+      ? [root.helperLauncherPath, root.helperPath, "apply", String(systemPolicyDraft.hibernateDelaySeconds), systemPolicyDraft.hibernateOnAcPower ? "yes" : "no"]
+      : [root.helperLauncherPath, root.helperPath, "reset"]
+    helperProcess.running = true
+    return systemPolicyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED", { pair: pendingRequestedSystemPolicy })
+  }
+
+  function completeSystemPolicyReadback(effective) {
+    var requested = pendingRequestedSystemPolicy
+    requestedSystemPolicy = requested
+    effectiveSystemPolicy = effective
+    systemPolicyProvenance = effective && effective.provenance ? effective.provenance : []
+    systemPolicyReasonCode = requested && effective
+      && requested.hibernateDelaySeconds === effective.hibernateDelaySeconds
+      && requested.hibernateOnAcPower === effective.hibernateOnAcPower
+      ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    if (!requested && effective) systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET-EFFECTIVE-DIFFERS"
+    systemPolicyBusy = false
+    systemPolicyMutation = ""
+    pendingRequestedSystemPolicy = null
+  }
+
   function applySystemPolicy() {
     if (systemPolicyBusy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (!validSystemPolicy(systemPolicyDraft)) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
-    systemPolicyBusy = true
     var fixture = systemPolicyFixture || {}
     var authorization = fixture.authorization || "authorized"
+    if (fixture.busy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (authorization === "unavailable") {
       systemPolicyBusy = false
       systemPolicyReasonCode = "HBR-SYSTEM-POLICY-UNAVAILABLE"
@@ -275,6 +333,7 @@ Item {
       systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
       return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE")
     }
+    if (authorization === "authorized") return submitSystemPolicyMutation("apply")
     var requested = { hibernateDelaySeconds: systemPolicyDraft.hibernateDelaySeconds,
       hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide" }
     var readback = fixture.readbackPolicy || requested
@@ -300,6 +359,7 @@ Item {
   function resetSystemPolicy() {
     if (systemPolicyBusy) return systemPolicyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     var fixture = systemPolicyFixture || {}
+    if (fixture.authorization === "authorized") return submitSystemPolicyMutation("reset")
     systemPolicyBusy = true
     if (fixture.authorization === "unavailable") {
       systemPolicyBusy = false
@@ -351,6 +411,57 @@ Item {
       }
       root.directoryReady = true
       policyFile.reload()
+    }
+  }
+
+  Process {
+    id: helperProcess
+    stdout: StdioCollector { id: helperStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.systemPolicyBusy = false
+        root.systemPolicyReasonCode = root.systemPolicyMutation === "reset"
+          ? "HBR-SYSTEM-POLICY-HELPER-REJECTED" : "HBR-SYSTEM-POLICY-WRITE-FAILED"
+        root.systemPolicyMutation = ""
+        root.pendingRequestedSystemPolicy = null
+        return
+      }
+      if (root.systemPolicyMutation === "apply") {
+        var requested = root.parseRequestedReadback(helperStdout.text)
+        if (!requested) {
+          root.systemPolicyBusy = false
+          root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-CONTRADICTORY"
+          root.systemPolicyMutation = ""
+          root.pendingRequestedSystemPolicy = null
+          return
+        }
+        root.pendingRequestedSystemPolicy = requested
+      }
+      effectiveProcess.command = [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
+      effectiveProcess.running = true
+    }
+  }
+
+  Process {
+    id: effectiveProcess
+    stdout: StdioCollector { id: effectiveStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.systemPolicyBusy = false
+        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+        root.systemPolicyMutation = ""
+        root.pendingRequestedSystemPolicy = null
+        return
+      }
+      var effective = root.parseEffectiveReadback(effectiveStdout.text)
+      if (!effective) {
+        root.systemPolicyBusy = false
+        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+        root.systemPolicyMutation = ""
+        root.pendingRequestedSystemPolicy = null
+        return
+      }
+      root.completeSystemPolicyReadback(effective)
     }
   }
 

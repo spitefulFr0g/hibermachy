@@ -25,7 +25,31 @@ mkdir -p "$test_root/.config/omarchy/plugins"
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
 
-HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" HBR_TEST_MODE=1 OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
+helper_fixture="$test_root/helper-fixture"
+effective_fixture="$test_root/effective-policy-fixture"
+cat > "$helper_fixture" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == apply ]]; then
+  printf 'requested-delay-seconds=%s requested-hibernate-on-ac=%s\n' "$2" "$3"
+elif [[ "$1" == reset ]]; then
+  exit 0
+elif [[ "$2" == apply ]]; then
+  printf 'requested-delay-seconds=%s requested-hibernate-on-ac=%s\n' "$3" "$4"
+elif [[ "$2" == reset ]]; then
+  exit 0
+else
+  exit 1
+fi
+EOF
+cat > "$effective_fixture" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '/etc/systemd/sleep.conf.d/90-hibermachy.conf' '[Sleep]' 'HibernateDelaySec=9000s' 'HibernateOnACPower=no'
+EOF
+chmod 700 "$helper_fixture" "$effective_fixture"
+
+HOME="$test_root" XDG_CONFIG_HOME="$test_root/xdg-config" HBR_TEST_MODE=1 HBR_POLICY_HELPER_PATH="$helper_fixture" HBR_POLICY_HELPER_LAUNCHER="$helper_fixture" HBR_EFFECTIVE_POLICY_READER="$effective_fixture" OMARCHY_PATH=/usr/share/omarchy quickshell --path /usr/share/omarchy/shell --no-color > "$test_root/host.log" 2>&1 &
 host_pid=$!
 
 call() {
@@ -148,8 +172,12 @@ call "$plugin_id" editSystemPolicyDraft 9000 false | node -e 'const r=JSON.parse
 call "$plugin_id" reviewSystemPolicy | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if (!r.accepted || r.pair.hibernateDelaySeconds!==9000 || r.pair.hibernateOnAcPower!==false) process.exit(1)'
 call "$plugin_id" setSystemPolicyFixture '{"authorization":"authorized","helper":"accepted","readback":"available","effective":{"hibernateDelaySeconds":9000,"hibernateOnAcPower":false},"provenance":["/etc/systemd/sleep.conf.d/90-hibermachy.conf"]}' >/dev/null
 receipt=$(call "$plugin_id" applySystemPolicy)
-node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-APPLIED") process.exit(1)' "$receipt"
-status=$(status_json)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-SUBMITTED") process.exit(1)' "$receipt"
+for _ in $(seq 1 50); do
+  status=$(status_json)
+  if node -e 'const s=JSON.parse(process.argv[1]); if (s.systemPolicyReasonCode!=="HBR-SYSTEM-POLICY-APPLIED") process.exit(1)' "$status"; then break; fi
+  sleep 0.1
+done
 node -e 'const s=JSON.parse(process.argv[1]); if (!s.requestedSystemPolicy || !s.effectiveSystemPolicy || s.systemPolicyProvenance.length!==1) process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-SYSTEM-003 authentication cancellation does not replay or mutate requested policy'
@@ -158,6 +186,44 @@ receipt=$(call "$plugin_id" applySystemPolicy)
 node -e 'const r=JSON.parse(process.argv[1]); if (r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-AUTH-CANCELLED") process.exit(1)' "$receipt"
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.requestedSystemPolicy.hibernateDelaySeconds!==9000) process.exit(1)' "$status"
+
+printf '%s\n' 'HBR-CHK-SYSTEM-004 denial, helper, write, and readback failures remain typed and non-replaying'
+for fixture in \
+  '{"authorization":"denied","helper":"accepted"}' \
+  '{"authorization":"fixture","helper":"rejected"}' \
+  '{"authorization":"fixture","helper":"accepted","write":"failed"}' \
+  '{"authorization":"fixture","helper":"accepted","readback":"contradictory"}' \
+  '{"authorization":"fixture","helper":"accepted","readback":"unavailable"}'; do
+  call "$plugin_id" setSystemPolicyFixture "$fixture" >/dev/null
+  receipt=$(call "$plugin_id" applySystemPolicy)
+  node -e 'const r=JSON.parse(process.argv[1]); if (r.accepted) process.exit(1)' "$receipt"
+done
+
+printf '%s\n' 'HBR-CHK-SYSTEM-005 administrator precedence is effective-policy difference, not write failure'
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"fixture","helper":"accepted","readbackPolicy":{"hibernateDelaySeconds":9000,"hibernateOnAcPower":false},"effective":{"hibernateDelaySeconds":3600,"hibernateOnAcPower":true},"provenance":["/etc/systemd/sleep.conf.d/99-administrator.conf"]}' >/dev/null
+receipt=$(call "$plugin_id" applySystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-DIFFERS") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.effectiveSystemPolicy.hibernateDelaySeconds!==3600 || s.systemPolicyProvenance[0]!=="/etc/systemd/sleep.conf.d/99-administrator.conf") process.exit(1)' "$status"
+
+printf '%s\n' 'HBR-CHK-SYSTEM-006 only one privileged mutation is in flight'
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"authorized","helper":"accepted","busy":true}' >/dev/null
+second=$(call "$plugin_id" applySystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (r.reasonCode!=="HBR-SYSTEM-POLICY-BUSY") process.exit(1)' "$second"
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"authorized","helper":"accepted"}' >/dev/null
+first=$(call "$plugin_id" applySystemPolicy)
+for _ in $(seq 1 50); do
+  status=$(status_json)
+  if node -e 'const s=JSON.parse(process.argv[1]); if (s.systemPolicyReasonCode!=="HBR-SYSTEM-POLICY-APPLIED") process.exit(1)' "$status"; then break; fi
+  sleep 0.1
+done
+
+printf '%s\n' 'HBR-CHK-SYSTEM-007 reset is narrow and leaves effective administrator policy visible'
+call "$plugin_id" setSystemPolicyFixture '{"authorization":"fixture","helper":"accepted"}' >/dev/null
+receipt=$(call "$plugin_id" resetSystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-RESET") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.requestedSystemPolicy!==null || s.effectiveSystemPolicy!==null) process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-POLICY-001 first load persists safe defaults'
 policy=$(user_policy_json)

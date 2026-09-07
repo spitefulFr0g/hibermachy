@@ -94,6 +94,20 @@ fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
 }
 
 #[test]
+fn apply_reports_the_canonical_requested_policy_for_the_panel_to_reconcile() {
+    let _guard = test_lock();
+    prepare_policy_directory();
+
+    let result = run(&["apply", "7200", "no"]);
+
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        "requested-delay-seconds=7200 requested-hibernate-on-ac=no\n"
+    );
+}
+
+#[test]
 fn read_only_protocol_probe_reports_release_and_supported_range_without_root() {
     let _guard = test_lock();
     let target = prepare_policy_directory();

@@ -78,7 +78,17 @@ fn run() -> Result<(), &'static str> {
         "apply" => {
             let policy = parse_apply(values)?;
             let bytes = policy.recognized_bytes();
-            secure_fs::replace_and_verify(POLICY_DIRECTORY, TARGET_NAME, bytes.as_bytes())
+            secure_fs::replace_and_verify(POLICY_DIRECTORY, TARGET_NAME, bytes.as_bytes())?;
+            println!(
+                "requested-delay-seconds={} requested-hibernate-on-ac={}",
+                policy.hibernate_delay_seconds,
+                if policy.hibernate_on_ac_power {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+            Ok(())
         }
         "reset" if values.is_empty() => secure_fs::remove_and_verify(POLICY_DIRECTORY, TARGET_NAME),
         _ => Err("invalid command"),
