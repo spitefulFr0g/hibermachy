@@ -27,11 +27,13 @@ assert_meaning "$clean" 'Hibermachy uninstall removes executable artifacts but r
 assert_meaning "$clean" 'Hibermachy purge additionally removes retained user configuration and state'
 
 mkdir -p "$fixture_root/plugin" "$fixture_root/user" "$fixture_root/etc/systemd/sleep.conf.d" "$fixture_root/helper"
-printf '%s\n' '{"schemaVersion":1,"id":"dev.hibermachy","kinds":["service","panel"]}' > "$fixture_root/plugin/manifest.json"
+printf '%s\n' '{"schemaVersion":1,"id":"dev.hibermachy","version":"0.1.0","protocol":{"min":1,"max":1},"kinds":["service","panel"]}' > "$fixture_root/plugin/manifest.json"
 printf '%s\n' 'owner=alice' > "$fixture_root/installation-owner"
 printf '%s\n' '{"enabled":false}' > "$fixture_root/activation.json"
-printf '%s\n' '{"entries":[{"id":"setup.hibermachy","managedBy":"hibermachy","label":"Sleep & Hibernation","action":"open"},{"id":"system.hibermachy-staged-sleep","managedBy":"hibermachy","label":"Suspend then Hibernate","action":"requestStagedSleep"}]}' > "$fixture_root/menu.json"
+printf '%s\n' '// unrelated JSONC comment
+{"entries":[{"id":"setup.hibermachy","managedBy":"hibermachy","label":"Sleep & Hibernation","action":"open"},{"id":"system.hibermachy-staged-sleep","managedBy":"hibermachy","label":"Suspend then Hibernate","action":"requestStagedSleep"}]}' > "$fixture_root/menu.json"
 printf '%s\n' 'package=hibermachy-helper version=0.1.0' > "$fixture_root/helper/package"
+printf '%s\n' 'owner=pacman' > "$fixture_root/helper/package.owner"
 printf '%s\n' 'protocol-min=1 protocol-max=1' > "$fixture_root/helper/protocol"
 printf '%s\n' '{"schemaVersion":1,"revision":1,"automaticPolicyEnablement":false,"idleDelaySeconds":1800}' > "$fixture_root/user/config.json"
 printf '%s\n' '{"version":1}' > "$fixture_root/user/state.json"
@@ -40,6 +42,9 @@ printf '%s\n' '# Managed by Hibermachy. Do not edit.
 HibernateDelaySec=3600s
 HibernateOnACPower=no
 ' > "$fixture_root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
+printf '%s\n' 'owner=system
+mode=600
+links=1' > "$fixture_root/etc/systemd/sleep.conf.d/90-hibermachy.conf.owner"
 
 complete=$("$command_path" status --root "$fixture_root")
 printf '%s\n' 'HBR-CHK-LIFECYCLE-002 complete inventory'
@@ -53,6 +58,11 @@ jq -e '.scopes.automatic_policy_enablement.state == "compatible" and .scopes.aut
 printf '%s\n' '{"enabled":true}' > "$fixture_root/activation.json"
 active=$("$command_path" status --root "$fixture_root")
 jq -e '.scopes.activation.state == "compatible" and .scopes.activation.enabled == true' <<<"$active" >/dev/null
+
+printf '%s\n' 'protocol-min=9 protocol-max=9' > "$fixture_root/helper/protocol"
+version_mismatch=$("$command_path" status --root "$fixture_root")
+jq -e '.scopes.helper_protocol.state == "mismatched" and .scopes.helper_protocol.helperReleaseVersion == "0.1.0" and .scopes.helper_protocol.checkoutReleaseVersion == "0.1.0"' <<<"$version_mismatch" >/dev/null
+printf '%s\n' 'protocol-min=1 protocol-max=1' > "$fixture_root/helper/protocol"
 
 printf '%s\n' 'HBR-CHK-LIFECYCLE-005 named partial inventories'
 rm -rf "$fixture_root/plugin"
@@ -85,7 +95,7 @@ assert_scope "$partial" helper_protocol mismatched
 assert_scope "$partial" menu_contribution colliding
 assert_scope "$partial" requested_system_policy unrecognized
 jq -e '.scopes.owned_target.state == "unrecognized"' <<<"$partial" >/dev/null
-jq -e '.scopes.helper_protocol.helperProtocolMin == 9 and .scopes.helper_protocol.helperProtocolMax == 9 and .scopes.helper_protocol.checkoutProtocolMin == 1 and .scopes.helper_protocol.checkoutProtocolMax == 1' <<<"$partial" >/dev/null
+jq -e '.scopes.helper_protocol.helperProtocolMin == 9 and .scopes.helper_protocol.helperProtocolMax == 9 and .scopes.helper_protocol.checkoutProtocolMin == null and .scopes.helper_protocol.checkoutProtocolMax == null' <<<"$partial" >/dev/null
 jq -e '(.scopes.checkout.recovery | length > 0) and (.scopes.menu_contribution.recovery | length > 0) and (.scopes.requested_system_policy.recovery | length > 0)' <<<"$partial" >/dev/null
 
 mkdir -p "$fixture_root/plugin"
@@ -107,5 +117,5 @@ incomplete=$("$command_path" status --root "$fixture_root")
 assert_scope "$incomplete" user_configuration_state incomplete
 
 printf '%s\n' 'HBR-CHK-LIFECYCLE-004 retained data and named lifecycle meanings'
-jq -e '(.scopes.user_configuration_state.state == "compatible") and ((.scopes.user_configuration_state.recovery | length) > 0)' <<<"$partial" >/dev/null
+jq -e '(.scopes.user_configuration_state.state == "incomplete") and ((.scopes.user_configuration_state.recovery | length) > 0)' <<<"$incomplete" >/dev/null
 assert_meaning "$partial" 'plugin activation is distinct from automatic-policy enablement'

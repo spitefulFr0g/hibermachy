@@ -51,19 +51,20 @@ activation_state() {
 
 menu_state() {
   local file="$root/menu.json"
+  menu_document() { sed -E 's#^[[:space:]]*//.*$##; s#//.*$##' "$file"; }
   if [[ -L "$file" ]]; then
     scope inaccessible user-owned 'Preserve a suspicious shared menu filesystem object for explicit resolution.'
   elif [[ ! -e "$file" ]]; then
     missing_scope user-owned 'Reconcile the namespaced menu contribution only after validating shared menu state.'
-  elif ! jq -e '.entries | type == "array"' "$file" >/dev/null 2>&1; then
+  elif ! menu_document | jq -e '.entries | type == "array"' >/dev/null 2>&1; then
     scope modified user-owned 'Preserve malformed shared menu state for explicit resolution.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | group_by(.id) | map(length > 1 or .[0].managedBy != "hibermachy") | any' "$file" >/dev/null; then
+  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | group_by(.id) | map(length > 1 or .[0].managedBy != "hibermachy") | any' >/dev/null; then
     scope colliding user-owned 'Preserve the colliding shared entry; do not overwrite it.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | sort_by(.id) | (length == 2 and .[0].id == "setup.hibermachy" and .[0].managedBy == "hibermachy" and .[0].label == "Sleep & Hibernation" and .[0].action == "open" and .[1].id == "system.hibermachy-staged-sleep" and .[1].managedBy == "hibermachy" and .[1].label == "Suspend then Hibernate" and .[1].action == "requestStagedSleep")' "$file" >/dev/null; then
+  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | sort_by(.id) | (length == 2 and .[0].id == "setup.hibermachy" and .[0].managedBy == "hibermachy" and .[0].label == "Sleep & Hibernation" and .[0].action == "open" and .[1].id == "system.hibermachy-staged-sleep" and .[1].managedBy == "hibermachy" and .[1].label == "Suspend then Hibernate" and .[1].action == "requestStagedSleep")' >/dev/null; then
     scope compatible user-owned 'Managed entries are present; their actions still require a compatible live service.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' "$file" >/dev/null; then
+  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' >/dev/null; then
     scope modified user-owned 'Preserve modified managed entries until their generated shape is explicitly resolved.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | length > 0' "$file" >/dev/null; then
+  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | length > 0' >/dev/null; then
     scope incomplete user-owned 'Reconcile both recognized entries without changing unrelated shared menu state.'
   else
     missing_scope user-owned 'Add only the recognized namespaced entries during setup.'
@@ -78,7 +79,7 @@ helper_state() {
     missing_scope machine-wide 'Build and install the helper through the normal package manager before policy recovery.'
   elif [[ ! -r "$file" ]]; then
     scope inaccessible machine-wide 'Resolve helper package ownership and permissions before invoking it.'
-  elif grep -Eq '^package=hibermachy-helper version=[0-9]+\.[0-9]+\.[0-9]+$' "$file"; then
+  elif grep -Eq '^package=hibermachy-helper version=[0-9]+\.[0-9]+\.[0-9]+$' "$file" && grep -qx 'owner=pacman' "${file}.owner" 2>/dev/null; then
     scope compatible machine-wide 'Helper package is independently present; it does not prove requested policy is applied.'
   else
     scope modified machine-wide 'Reinstall or inspect the helper through the package manager; do not replace it in place.'
@@ -87,26 +88,33 @@ helper_state() {
 
 protocol_state() {
   local file="$root/helper/protocol"
+  local manifest="$root/plugin/manifest.json"
   if [[ -L "$file" ]]; then
     scope inaccessible machine-wide 'Resolve the helper protocol filesystem object before probing it.'
   elif [[ ! -e "$file" ]]; then
     missing_scope machine-wide 'Install a helper with an overlapping protocol range before helper-backed operations.'
-  elif ! grep -Eq '^protocol-min=[0-9]+ protocol-max=[0-9]+$' "$file"; then
+  elif ! grep -Eq '^(release=[^ ]+ )?protocol-min=[0-9]+ protocol-max=[0-9]+$' "$file"; then
     scope modified machine-wide 'Probe the helper again; malformed protocol state is not actionable.'
-  elif grep -Eq '^protocol-min=([0-9]|1) protocol-max=([1-9][0-9]*)$' "$file" && \
-      awk -F'[ =]' '{ exit !($2 <= 1 && $4 >= 1) }' "$file"; then
-    scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
   else
     local helper_min helper_max
-    helper_min=$(awk -F'[ =]' '{print $2}' "$file")
-    helper_max=$(awk -F'[ =]' '{print $4}' "$file")
+    helper_min=$(sed -n 's/.*protocol-min=\([0-9]*\).*/\1/p' "$file")
+    helper_max=$(sed -n 's/.*protocol-max=\([0-9]*\).*/\1/p' "$file")
+    local checkout_min checkout_max
+    checkout_min=$(jq -r '.protocol.min // empty' "$manifest" 2>/dev/null || true)
+    checkout_max=$(jq -r '.protocol.max // empty' "$manifest" 2>/dev/null || true)
     local helper_release checkout_release
     helper_release=$(sed -n 's/^package=hibermachy-helper version=//p' "$root/helper/package" 2>/dev/null || true)
+    [[ -n "$helper_release" ]] || helper_release=$(sed -n 's/^release=\([^ ]*\).*/\1/p' "$file")
     checkout_release=$(jq -r '.version // "unknown"' "$root/plugin/manifest.json" 2>/dev/null || printf '%s' unknown)
+    if [[ -n "$checkout_min" && -n "$checkout_max" ]] && awk -v hmin="$helper_min" -v hmax="$helper_max" -v cmin="$checkout_min" -v cmax="$checkout_max" 'BEGIN { exit !(hmin <= cmax && hmax >= cmin) }'; then
+      scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
+    else
     jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
       --arg helper_release "${helper_release:-unknown}" --arg checkout_release "$checkout_release" \
-      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:1, checkoutProtocolMax:1, helperReleaseVersion:$helper_release, checkoutReleaseVersion:$checkout_release}' \
+      --argjson checkout_min "${checkout_min:-null}" --argjson checkout_max "${checkout_max:-null}" \
+      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:$checkout_min, checkoutProtocolMax:$checkout_max, helperReleaseVersion:$helper_release, checkoutReleaseVersion:$checkout_release}' \
       <<<"$(scope mismatched machine-wide 'Install a helper whose declared protocol range overlaps this checkout.')"
+    fi
   fi
 }
 
@@ -161,13 +169,14 @@ policy_state() {
 
 owned_target_state() {
   local file="$root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
+  local metadata="${file}.owner"
   if [[ -L "$file" ]]; then
     scope inaccessible machine-wide 'Do not follow or replace a suspicious owned target.'
   elif [[ ! -e "$file" ]]; then
     missing_scope machine-wide 'Owned target is absent and can be recreated only by authenticated policy apply.'
   elif [[ -L "$file" || ! -f "$file" || ! -r "$file" ]]; then
     scope inaccessible machine-wide 'Do not follow or replace a suspicious owned target.'
-  elif [[ "$(<"$file")" == $'# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=3600s\nHibernateOnACPower=no' ]]; then
+  elif [[ "$(<"$file")" == $'# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=3600s\nHibernateOnACPower=no' ]] && [[ "$(<"$metadata")" == $'owner=system\nmode=600\nlinks=1' ]]; then
     scope compatible machine-wide 'Target exists; requested-policy content and effective policy remain separate observations.'
   elif grep -q '^# Managed by Hibermachy\. Do not edit\.$' "$file"; then
     scope modified machine-wide 'Owned target is modified; preserve it until explicitly resolved.'
