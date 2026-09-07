@@ -24,8 +24,11 @@ rg -q 'Automatic staged sleep' plugin/Panel.qml
 rg -q 'System policy' plugin/Panel.qml
 rg -q 'Current status' plugin/Panel.qml
 rg -q 'Accessible\.name' plugin/Panel.qml
-rg -q 'Accessible\.enabled' plugin/Panel.qml
-rg -q 'Accessible\.liveRegion' plugin/Panel.qml
+rg -q 'Accessible\.description' plugin/Panel.qml
+! rg -q 'Accessible\.enabled' plugin/Panel.qml
+rg -q 'Style\.space' plugin/Panel.qml
+rg -q 'Color\.foreground' plugin/Panel.qml
+rg -q 'Accessible\.announce' plugin/Panel.qml
 rg -q 'ConfirmDialog' plugin/Panel.qml
 rg -q 'PanelKeyCatcher' plugin/Panel.qml
 rg -q 'resetHistory' plugin/Panel.qml
@@ -34,8 +37,10 @@ rg -q 'editSystemPolicyDraft' plugin/Panel.qml
 rg -q 'onTabRequested' plugin/Panel.qml
 rg -q 'onCloseRequested' plugin/Panel.qml
 rg -q 'focusBeforeConfirmation' plugin/Panel.qml
+rg -q 'accessibilityJourney' plugin/Panel.qml
 rg -q 'sleepExecutabilitySummary' plugin/Service.qml
 ! rg -q 'automaticReadiness\(|manualReadiness\(|suspendFallbackAvailable\(' plugin/Panel.qml
+! rg -q 'systemctl|helperPath|effectivePolicyReaderPath|contractProbePath' plugin/Panel.qml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
 host_pid=''
@@ -218,17 +223,26 @@ call shell setPluginEnabled "$plugin_id" true | grep -qx 'ok'
 status=$(status_json)
 printf '%s\n' 'HBR-CHK-PANEL-002 panel summon and cancellation return through the hosted shell seam'
 call shell summon "$plugin_id" '{}' >/dev/null
+journey=$(call dev.hibermachy.panel-test accessibilityJourney)
+node -e 'const j=JSON.parse(process.argv[1]); if (!j.accepted || !j.forward || !j.reverse || !j.confirmationOpened || !j.cancellationClosed || !j.focusRestored || !j.accessibleNames || !j.dirtyState || !j.disabledState || !j.statusAnnouncement || !j.nonColorStatus) process.exit(1)' "$journey"
 call shell hide "$plugin_id"
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
 printf '%s\n' 'HBR-CHK-READINESS-001 readiness operations remain independent and live state is exposed'
+expected_manual='ready'
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing \
+  || "${HIBERMACHY_SIM_SYSTEM_INHIBITED:-0}" == 1 \
+  || "${HIBERMACHY_SIM_OBSERVATION_FAILURE:-0}" == 1 \
+  || ("${HIBERMACHY_SIM_STAGED_SLEEP:-1}" == 0 && "${HIBERMACHY_SIM_SUSPEND:-1}" == 0) ]]; then
+  expected_manual='not-ready'
+fi
 node -e '
   const s = JSON.parse(process.argv[1]);
   const keys = ["automaticStagedSleepReadiness", "manualStagedSleepReadiness", "systemPolicyReadiness", "diagnosticsReadiness", "sleepExecutability", "activeBlocker"];
   if (keys.some((key) => !(key in s))) process.exit(1);
   if (!s.sleepExecutability || typeof s.sleepExecutability.observationFailed !== "boolean") process.exit(1);
-  if (s.automaticStagedSleepReadiness !== "not-ready" || s.manualStagedSleepReadiness !== "ready") process.exit(1);
-' "$status"
+  if (s.automaticStagedSleepReadiness !== "not-ready" || s.manualStagedSleepReadiness !== process.argv[2]) process.exit(1);
+' "$status" "$expected_manual"
 printf '%s\n' 'HBR-CHK-SYSTEM-001 system policy starts as an independent unpersisted draft'
 assert_system_policy_draft "$status"
 

@@ -1,4 +1,6 @@
 import QtQuick
+import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -22,6 +24,8 @@ Panel {
   property string confirmationMessage: ""
   property string actionResult: ""
   property Item focusBeforeConfirmation: null
+  property int focusBeforeIndex: -1
+  property int lastRestoredFocusIndex: -1
   property int focusIndex: 0
   property var focusTargets: []
 
@@ -66,13 +70,41 @@ Panel {
   }
   function ask(kind, message) {
     focusBeforeConfirmation = focusTargets.length ? focusTargets[focusIndex] : keyCatcher
+    focusBeforeIndex = focusIndex
     confirmationKind = kind
     confirmationMessage = message + " Press Escape or choose Cancel to leave it unchanged."
   }
   function restoreFocus() {
     var target = focusBeforeConfirmation || keyCatcher
+    if (focusBeforeIndex >= 0) focusIndex = focusBeforeIndex
+    lastRestoredFocusIndex = focusIndex
     focusBeforeConfirmation = null
+    focusBeforeIndex = -1
     Qt.callLater(function() { if (target) target.forceActiveFocus() })
+  }
+
+  function accessibilityJourney(): string {
+    if (!focusTargets.length) return JSON.stringify({ accepted: false, reasonCode: "HBR-PANEL-FOCUS-UNAVAILABLE" })
+    var start = focusIndex
+    moveFocus(1)
+    var forward = focusIndex !== start
+    moveFocus(-1)
+    var reverse = focusIndex === start
+    ask("reset-history", "Test cancellation: retained history remains unchanged.")
+    var confirmationOpened = confirmationKind === "reset-history"
+    cancelConfirmation()
+    var accessibleNames = [automaticToggle.Accessible.name, saveButton.Accessible.name,
+      applyButton.Accessible.name, manualButton.Accessible.name].every(function(name) { return String(name).length > 0 })
+    var wasDirty = draftDirty
+    editIdleDelaySeconds(draftIdleDelaySeconds)
+    var dirtyState = draftDirty
+    draftDirty = wasDirty
+    return JSON.stringify({ accepted: true, forward: forward, reverse: reverse,
+      confirmationOpened: confirmationOpened, cancellationClosed: confirmationKind === "",
+      focusRestored: lastRestoredFocusIndex === start, accessibleNames: accessibleNames,
+      dirtyState: dirtyState, disabledState: !saveButton.enabled,
+      statusAnnouncement: !!(statusSnapshot && statusSnapshot.statusAnnouncement),
+      nonColorStatus: statusSummary.indexOf("Automatic staged sleep:") >= 0 })
   }
   function cancelConfirmation() {
     confirmationKind = ""
@@ -223,7 +255,7 @@ Panel {
           enabled: root.draftDirty
           onClicked: root.saveDraft()
           Accessible.name: "Save automatic staged sleep policy"
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
 
         PanelSeparator { width: parent.width }
@@ -273,7 +305,7 @@ Panel {
           enabled: root.systemDraftDirty && root.statusSnapshot && root.statusSnapshot.systemPolicyReadinessReasonCode === "HBR-CONTRACT-READY"
           onClicked: root.reviewAndConfirmSystemPolicy()
           Accessible.name: "Review and apply machine-wide system policy"
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
         Button {
           id: resetSystemButton
@@ -283,7 +315,7 @@ Panel {
           enabled: root.statusSnapshot && root.statusSnapshot.requestedSystemPolicy !== null
           onClicked: root.ask("reset-system", "Reset only Hibermachy's requested system policy; user policy and plugin activation remain unchanged.")
           Accessible.name: "Reset requested system policy"
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
 
         PanelSeparator { width: parent.width }
@@ -297,7 +329,7 @@ Panel {
           font.pixelSize: Style.font.body
           wrapMode: Text.WordWrap
           Accessible.name: "Current operational status: " + text
-          Accessible.liveRegion: Accessible.Polite
+          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
         }
         Text {
           width: parent.width
@@ -321,7 +353,7 @@ Panel {
           enabled: root.statusSnapshot && root.statusSnapshot.manualStagedSleepReadiness === "ready"
           onClicked: root.beginManualConfirmation()
           Accessible.name: manualActionText
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
         Text {
           width: parent.width
@@ -332,7 +364,7 @@ Panel {
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
-          Accessible.liveRegion: Accessible.Polite
+          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
           Accessible.name: "Latest action result: " + text
         }
         Button {
@@ -343,7 +375,7 @@ Panel {
           enabled: root.statusSnapshot && root.statusSnapshot.reasonCode.indexOf("HBR-POLICY-") === 0
           onClicked: root.ask("reset-policy", "Reset invalid user policy to disabled automatic staged sleep and a 30 minute idle delay.")
           Accessible.name: "Reset invalid user policy"
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
         Button {
           id: resetHistoryButton
@@ -353,7 +385,7 @@ Panel {
           enabled: root.statusSnapshot && root.statusSnapshot.outcomeHistoryCount > 0
           onClicked: root.ask("reset-history", "Delete retained outcome history. This does not change live readiness or policy.")
           Accessible.name: "Reset retained outcome history"
-          Accessible.enabled: enabled
+          Accessible.description: enabled ? "Enabled" : "Disabled"
         }
       }
     }
@@ -391,5 +423,11 @@ Panel {
       hibernateFifteen, hibernateHour, hibernateTwoHours, hibernateNumber.field, acToggle,
       applyButton, resetSystemButton, manualButton, resetPolicyButton, resetHistoryButton]
     refresh()
+  }
+
+  IpcHandler {
+    enabled: Quickshell.env("HBR_TEST_MODE") === "1"
+    target: "dev.hibermachy.panel-test"
+    function accessibilityJourney(): string { return root.accessibilityJourney() }
   }
 }
