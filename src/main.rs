@@ -6,6 +6,9 @@ use std::{env, process::ExitCode};
 
 const TARGET_NAME: &str = "90-hibermachy.conf";
 const POLICY_PREFIX: &str = "# Managed by Hibermachy. Do not edit.\n[Sleep]\n";
+const RELEASE: &str = env!("CARGO_PKG_VERSION");
+const PROTOCOL_MIN: u16 = 1;
+const PROTOCOL_MAX: u16 = 1;
 
 #[cfg(hibermachy_test_root)]
 const POLICY_DIRECTORY: &str = concat!(
@@ -62,11 +65,15 @@ fn parse_apply(arguments: &[String]) -> Result<RequestedSystemPolicy, &'static s
 }
 
 fn run() -> Result<(), &'static str> {
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    let (command, values) = arguments.split_first().ok_or("invalid command")?;
+    if command == "probe" && values.is_empty() {
+        println!("release={RELEASE} protocol-min={PROTOCOL_MIN} protocol-max={PROTOCOL_MAX}");
+        return Ok(());
+    }
     if !secure_fs::has_effective_root() {
         return Err("effective root required");
     }
-    let arguments: Vec<String> = env::args().skip(1).collect();
-    let (command, values) = arguments.split_first().ok_or("invalid command")?;
     match command.as_str() {
         "apply" => {
             let policy = parse_apply(values)?;

@@ -94,6 +94,25 @@ fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
 }
 
 #[test]
+fn read_only_protocol_probe_reports_release_and_supported_range_without_root() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+
+    let result = run(&["probe"]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        "release=0.1.0 protocol-min=1 protocol-max=1\n"
+    );
+    assert!(!target.exists());
+}
+
+#[test]
 fn reset_is_idempotent_for_absent_target_and_removes_a_canonical_policy() {
     let _guard = test_lock();
     let target = prepare_policy_directory();
