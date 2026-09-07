@@ -98,6 +98,13 @@ assert_refused HBR-LIFECYCLE-INTERRUPTED
 [[ ! -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" && ! -e "$root/helper/package" && -e "$root/plugin" ]]
 
 seed
+printf '%s\n' 'authorization=accepted reset=success' > "$root/policy-reset"
+printf '%s\n' 'after=disable' > "$root/interrupt"
+assert_refused HBR-LIFECYCLE-INTERRUPTED
+[[ $(cat "$root/activation.json") == '{"enabled":false}' ]]
+[[ -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" && -e "$root/helper/package" && -e "$root/plugin" ]]
+
+seed
 printf '%s\n' '{"setup.hibermachy":{"managedBy":"other"}}' > "$root/menu.jsonc"
 assert_refused HBR-MENU-MANAGED-MODIFIED
 [[ ! -e "$root/etc/systemd/sleep.conf.d/90-hibermachy.conf" && ! -e "$root/helper/package" && -e "$root/plugin" ]]
