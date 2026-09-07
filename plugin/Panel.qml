@@ -69,8 +69,9 @@ Panel {
     draftDirty = !receipt.accepted
   }
   function ask(kind, message) {
-    focusBeforeConfirmation = focusTargets.length ? focusTargets[focusIndex] : keyCatcher
-    focusBeforeIndex = focusIndex
+    var activeIndex = focusTargets.findIndex(function(target) { return target && target.activeFocus })
+    focusBeforeIndex = activeIndex >= 0 ? activeIndex : focusIndex
+    focusBeforeConfirmation = activeIndex >= 0 ? focusTargets[activeIndex] : keyCatcher
     confirmationKind = kind
     confirmationMessage = message + " Press Escape or choose Cancel to leave it unchanged."
   }
@@ -92,7 +93,10 @@ Panel {
     var reverse = focusIndex === start
     ask("reset-history", "Test cancellation: retained history remains unchanged.")
     var confirmationOpened = confirmationKind === "reset-history"
-    cancelConfirmation()
+    var confirmationControls = confirmation.cancelAccessibleName === "Cancel"
+      && confirmation.confirmAccessibleName === "Confirm"
+    moveConfirmationSelection(-1)
+    activateConfirmationSelection()
     var accessibleNames = [automaticToggle.Accessible.name, saveButton.Accessible.name,
       applyButton.Accessible.name, manualButton.Accessible.name].every(function(name) { return String(name).length > 0 })
     var wasDirty = draftDirty
@@ -110,6 +114,7 @@ Panel {
     service.setSystemPolicyFixture('{"authorization":"authorized"}')
     return JSON.stringify({ accepted: true, forward: forward, reverse: reverse,
       confirmationOpened: confirmationOpened, cancellationClosed: confirmationKind === "",
+      confirmationControls: confirmationControls,
       focusRestored: lastRestoredFocusIndex === start, accessibleNames: accessibleNames,
       dirtyState: dirtyState, disabledState: !saveButton.enabled,
       statusAnnouncement: !!(statusSnapshot && statusSnapshot.statusAnnouncement),
@@ -135,6 +140,12 @@ Panel {
     if (kind === "reset-policy") draftDirty = false
     if (kind === "reset-system") systemDraftDirty = false
     restoreFocus()
+  }
+  function moveConfirmationSelection(delta) {
+    if (confirmationKind !== "") confirmation.moveSelection(delta)
+  }
+  function activateConfirmationSelection() {
+    if (confirmationKind !== "") confirmation.activateSelected()
   }
   function beginManualConfirmation() {
     if (!statusSnapshot || statusSnapshot.manualStagedSleepReadiness !== "ready") return
@@ -170,14 +181,17 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
-        if (dy !== 0) root.moveFocus(dy)
+        if (root.confirmationKind !== "") root.moveConfirmationSelection(dy !== 0 ? dy : dx)
+        else if (dy !== 0) root.moveFocus(dy)
         if (dx !== 0) flickable.contentX = Math.max(0, flickable.contentX + dx * Style.space(24))
       }
-      onTabRequested: function(direction) { root.moveFocus(direction) }
+      onTabRequested: function(direction) {
+        if (root.confirmationKind !== "") root.moveConfirmationSelection(direction)
+        else root.moveFocus(direction)
+      }
       onActivateRequested: {
         if (root.confirmationKind !== "") {
-          if (confirmation.selectedIndex === 0) root.cancelConfirmation()
-          else root.confirmAction()
+          root.activateConfirmationSelection()
         } else if (root.focusTargets[root.focusIndex]) {
           var target = root.focusTargets[root.focusIndex]
           if (typeof target.clicked === "function") target.clicked()
@@ -403,13 +417,11 @@ Panel {
       }
     }
 
-    ConfirmDialog {
+    AccessibleConfirmDialog {
       id: confirmation
       anchors.fill: parent
       opened: root.confirmationKind !== ""
       message: root.confirmationMessage
-      cancelText: "Cancel"
-      confirmText: "Confirm"
       z: 10
       onCanceled: root.cancelConfirmation()
       onConfirmed: root.confirmAction()

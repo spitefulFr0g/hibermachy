@@ -30,7 +30,9 @@ rg -q 'Accessible\.description' plugin/Panel.qml
 rg -q 'Style\.space' plugin/Panel.qml
 rg -q 'Color\.foreground' plugin/Panel.qml
 rg -q 'Accessible\.announce' plugin/Panel.qml
-rg -q 'ConfirmDialog' plugin/Panel.qml
+rg -q 'AccessibleConfirmDialog' plugin/Panel.qml
+rg -q 'cancelAccessibleName|confirmAccessibleName' plugin/AccessibleConfirmDialog.qml
+rg -q 'moveSelection|activateSelected' plugin/AccessibleConfirmDialog.qml
 rg -q 'PanelKeyCatcher' plugin/Panel.qml
 rg -q 'resetHistory' plugin/Panel.qml
 rg -q 'heroStatus' plugin/Service.qml
@@ -236,6 +238,7 @@ node -e '
   const j=JSON.parse(process.argv[1]);
   const highContrast = process.argv[2] === "high-contrast";
   if (!j.accepted || !j.forward || !j.reverse || !j.confirmationOpened || !j.cancellationClosed || !j.focusRestored
+    || !j.confirmationControls
     || !j.accessibleNames || !j.dirtyState || !j.disabledState || !j.statusAnnouncement || !j.nonColorStatus
     || !j.authenticationCancellation || !j.authenticationFocusRestored || !j.contrastRoles
     || !(Number(j.scaledLayout) > (highContrast ? 32 : 0))) process.exit(1)
