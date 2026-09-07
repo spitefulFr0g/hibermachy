@@ -302,15 +302,22 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
 }
 
 fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suffix: &str) -> bool {
-    let Ok(temporary) = c_name(&format!(".restore-{suffix}.tmp")) else {
-        return false;
-    };
-    let Ok(mut file) = call_openat(
-        directory,
-        &temporary,
-        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-        0o600,
-    ) else {
+    let mut recovery = None;
+    for attempt in 0..16 {
+        let Ok(temporary) = c_name(&format!(".restore-{suffix}-{attempt}.tmp")) else {
+            return false;
+        };
+        if let Ok(file) = call_openat(
+            directory,
+            &temporary,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o600,
+        ) {
+            recovery = Some((temporary, file));
+            break;
+        }
+    }
+    let Some((temporary, mut file)) = recovery else {
         return false;
     };
     if file.write_all(bytes).is_err() || synchronize(&file).is_err() {
@@ -332,10 +339,8 @@ fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suff
         )
     } != 0
     {
-        // SAFETY: only this invocation's exclusive temporary name is removed.
-        if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
-            return false;
-        }
+        // Preserve the complete policy for administrator inspection when the target
+        // was recreated; never overwrite that administrator-owned object.
         return false;
     }
     synchronize(directory).is_ok()
