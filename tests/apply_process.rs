@@ -171,7 +171,7 @@ fn reset_readback_faults_restore_the_complete_previous_policy() {
     fs::write(&target, &previous).unwrap();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
 
-    for fault in ["remove", "sync", "readback", "contradictory"] {
+    for fault in ["remove", "sync", "readback", "contradictory", "final-sync"] {
         let result = run_fault(&["reset"], fault);
         assert!(
             !result.status.success(),

@@ -215,6 +215,7 @@ fn inject_fault(stage: &str) -> Result<(), &'static str> {
             "sync" => "synchronization failed",
             "readback" => "readback indeterminate",
             "contradictory" => "readback contradictory",
+            "final-sync" => "synchronization failed",
             _ => "injected failure",
         });
     }
@@ -233,9 +234,9 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
         return Err("lock failed");
     }
     let target = c_name(target_name)?;
-    if recognized_existing_target(&directory, &target)?.is_none() {
+    let Some(previous_policy) = recognized_existing_target(&directory, &target)? else {
         return Ok(());
-    }
+    };
     #[cfg(feature = "test-support")]
     let temporary_suffix = std::env::var("HIBERMACHY_TEST_RESET_TEMP")
         .unwrap_or_else(|_| std::process::id().to_string());
@@ -243,6 +244,7 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
     let temporary_suffix = std::process::id().to_string();
     let temporary = c_name(&format!(".{target_name}.{temporary_suffix}.reset.tmp"))?;
     let mut moved = false;
+    let mut removed = false;
     let result = (|| {
         // SAFETY: both names are fixed invocation-local names within the validated directory.
         if unsafe {
@@ -271,28 +273,68 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
         if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
             return Err("remove failed");
         }
-        // No fallible operation follows cleanup; a best-effort sync cannot turn a
-        // completed removal into a reported failure after the backup is gone.
-        let _ = synchronize(&directory);
+        removed = true;
+        synchronize(&directory)?;
+        inject_fault("final-sync")?;
         Ok(())
     })();
     if result.is_err() && moved {
-        // SAFETY: restore the complete recognized policy to its original fixed name.
-        let restored = unsafe {
-            renameat2(
-                directory.as_raw_fd(),
-                temporary.as_ptr(),
-                directory.as_raw_fd(),
-                target.as_ptr(),
-                RENAME_NOREPLACE,
-            )
-        } == 0
-            && synchronize(&directory).is_ok();
+        let restored = if removed {
+            restore_removed_policy(&directory, &target, &previous_policy, &temporary_suffix)
+        } else {
+            // SAFETY: restore the complete recognized policy to its original fixed name.
+            (unsafe {
+                renameat2(
+                    directory.as_raw_fd(),
+                    temporary.as_ptr(),
+                    directory.as_raw_fd(),
+                    target.as_ptr(),
+                    RENAME_NOREPLACE,
+                )
+            } == 0)
+                && synchronize(&directory).is_ok()
+        };
         if !restored {
             return Err("rollback failed");
         }
     }
     result
+}
+
+fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suffix: &str) -> bool {
+    let Ok(temporary) = c_name(&format!(".restore-{suffix}.tmp")) else {
+        return false;
+    };
+    let Ok(mut file) = call_openat(
+        directory,
+        &temporary,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+        0o600,
+    ) else {
+        return false;
+    };
+    if file.write_all(bytes).is_err() || synchronize(&file).is_err() {
+        // SAFETY: only this invocation's exclusive temporary name is removed.
+        unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        return false;
+    }
+    drop(file);
+    // SAFETY: never overwrite a target that appeared while reset was in progress.
+    if unsafe {
+        renameat2(
+            directory.as_raw_fd(),
+            temporary.as_ptr(),
+            directory.as_raw_fd(),
+            target.as_ptr(),
+            RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        // SAFETY: only this invocation's exclusive temporary name is removed.
+        unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        return false;
+    }
+    synchronize(directory).is_ok()
 }
 
 pub fn replace_and_verify(
