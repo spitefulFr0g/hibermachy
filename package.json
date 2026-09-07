@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:quattro-hosted",
-    "test:quattro-hosted": "tests/quattro-hosted-plugin.sh"
+    "test": "npm run test:quattro-hosted && npm run test:lifecycle",
+    "test:quattro-hosted": "tests/quattro-hosted-plugin.sh",
+    "test:lifecycle": "tests/lifecycle_status.sh"
   }
 }
