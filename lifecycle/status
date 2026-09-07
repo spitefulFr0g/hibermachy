@@ -13,8 +13,9 @@ root=$2
 
 scope() {
   local state=$1 ownership=$2 recovery=$3
-  jq -nc --arg state "$state" --arg ownership "$ownership" --arg recovery "$recovery" \
-    '{state:$state, ownership:$ownership, recovery:[$recovery]}'
+  local reason_code="HBR-LIFECYCLE-${state^^}"
+  jq -nc --arg state "$state" --arg ownership "$ownership" --arg recovery "$recovery" --arg reason_code "$reason_code" \
+    '{state:$state, ownership:$ownership, reasonCode:$reason_code, recovery:[$recovery]}'
 }
 
 missing_scope() { scope missing "$1" "$2"; }
@@ -52,13 +53,17 @@ activation_state() {
 menu_state() {
   local file="$root/menu.json"
   menu_document() {
-    awk 'BEGIN { in_string = 0; escaped = 0; in_comment = 0 }
+    awk 'BEGIN { in_string = 0; escaped = 0; in_comment = 0; in_block_comment = 0 }
       {
         output = ""
         for (i = 1; i <= length($0); i++) {
           character = substr($0, i, 1)
           next_character = substr($0, i + 1, 1)
           if (in_comment) continue
+          if (in_block_comment) {
+            if (character == "*" && next_character == "/") { in_block_comment = 0; i++ }
+            continue
+          }
           if (in_string) {
             output = output character
             if (escaped) escaped = 0
@@ -67,6 +72,9 @@ menu_state() {
           } else if (character == "\"") {
             in_string = 1
             output = output character
+          } else if (character == "/" && next_character == "*") {
+            in_block_comment = 1
+            i++
           } else if (character == "/" && next_character == "/") {
             in_comment = 1
             i++
@@ -126,6 +134,8 @@ protocol_state() {
     local checkout_min checkout_max
     checkout_min=$(jq -r '.protocol.min // empty' "$manifest" 2>/dev/null || true)
     checkout_max=$(jq -r '.protocol.max // empty' "$manifest" 2>/dev/null || true)
+    [[ "$checkout_min" =~ ^[0-9]+$ ]] || checkout_min=''
+    [[ "$checkout_max" =~ ^[0-9]+$ ]] || checkout_max=''
     local helper_release checkout_release
     helper_release=$(sed -n 's/^package=hibermachy-helper version=//p' "$root/helper/package" 2>/dev/null || true)
     [[ -n "$helper_release" ]] || helper_release=$(sed -n 's/^release=\([^ ]*\).*/\1/p' "$file")
@@ -178,6 +188,7 @@ user_data_state() {
 
 recognized_policy() {
   local file=$1 delay
+  [[ $(awk 'NF { count++ } END { print count + 0 }' "$file") -eq 4 ]] || return 1
   grep -qx '# Managed by Hibermachy. Do not edit.' "$file" &&
     grep -qx '\[Sleep\]' <(sed -n '2p' "$file") &&
     grep -Eq '^HibernateDelaySec=[0-9]+s$' <(sed -n '3p' "$file") &&

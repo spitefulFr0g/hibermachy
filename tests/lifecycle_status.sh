@@ -23,6 +23,7 @@ for scope in checkout activation menu_contribution helper_package helper_protoco
 done
 jq -e '.installationOwner.state == "unrecognized"' <<<"$clean" >/dev/null
 jq -e '.actionable == true' <<<"$clean" >/dev/null
+jq -e '.scopes.checkout.reasonCode == "HBR-LIFECYCLE-MISSING"' <<<"$clean" >/dev/null
 assert_meaning "$clean" 'plugin removal removes only the user-owned checkout'
 assert_meaning "$clean" 'Hibermachy uninstall removes executable artifacts but retains user configuration and state'
 assert_meaning "$clean" 'Hibermachy purge additionally removes retained user configuration and state'
