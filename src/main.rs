@@ -8,7 +8,10 @@ const TARGET_NAME: &str = "90-hibermachy.conf";
 const POLICY_PREFIX: &str = "# Managed by Hibermachy. Do not edit.\n[Sleep]\n";
 
 #[cfg(hibermachy_test_root)]
-const POLICY_DIRECTORY: &str = concat!(env!("HIBERMACHY_COMPILED_ROOT"), "/etc/systemd/sleep.conf.d");
+const POLICY_DIRECTORY: &str = concat!(
+    env!("HIBERMACHY_COMPILED_ROOT"),
+    "/etc/systemd/sleep.conf.d"
+);
 #[cfg(not(hibermachy_test_root))]
 const POLICY_DIRECTORY: &str = "/etc/systemd/sleep.conf.d";
 
@@ -20,14 +23,27 @@ struct RequestedSystemPolicy {
 
 impl RequestedSystemPolicy {
     fn recognized_bytes(self) -> String {
-        let ac = if self.hibernate_on_ac_power { "yes" } else { "no" };
-        format!("{POLICY_PREFIX}HibernateDelaySec={}s\nHibernateOnACPower={ac}\n", self.hibernate_delay_seconds)
+        let ac = if self.hibernate_on_ac_power {
+            "yes"
+        } else {
+            "no"
+        };
+        format!(
+            "{POLICY_PREFIX}HibernateDelaySec={}s\nHibernateOnACPower={ac}\n",
+            self.hibernate_delay_seconds
+        )
     }
 }
 
 fn parse_apply(arguments: &[String]) -> Result<RequestedSystemPolicy, &'static str> {
-    let [delay, ac] = arguments else { return Err("invalid command"); };
-    if delay.is_empty() || delay.len() > 6 || !delay.bytes().all(|byte| byte.is_ascii_digit()) || delay.starts_with('0') {
+    let [delay, ac] = arguments else {
+        return Err("invalid command");
+    };
+    if delay.is_empty()
+        || delay.len() > 6
+        || !delay.bytes().all(|byte| byte.is_ascii_digit())
+        || delay.starts_with('0')
+    {
         return Err("invalid delay");
     }
     let hibernate_delay_seconds = delay.parse::<u32>().map_err(|_| "invalid delay")?;
@@ -39,7 +55,10 @@ fn parse_apply(arguments: &[String]) -> Result<RequestedSystemPolicy, &'static s
         "no" => false,
         _ => return Err("invalid AC setting"),
     };
-    Ok(RequestedSystemPolicy { hibernate_delay_seconds, hibernate_on_ac_power })
+    Ok(RequestedSystemPolicy {
+        hibernate_delay_seconds,
+        hibernate_on_ac_power,
+    })
 }
 
 fn run() -> Result<(), &'static str> {

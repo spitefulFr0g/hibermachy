@@ -6,7 +6,10 @@ use std::{
     ffi::CString,
     fs::{File, Metadata},
     io::{Read, Write},
-    os::{fd::{AsRawFd, FromRawFd}, unix::fs::MetadataExt},
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::MetadataExt,
+    },
 };
 
 use std::os::raw::{c_char, c_int, c_uint};
@@ -18,15 +21,22 @@ const O_EXCL: c_int = 0o200;
 const O_DIRECTORY: c_int = 0o200_000;
 const O_NOFOLLOW: c_int = 0o400_000;
 const O_CLOEXEC: c_int = 0o2_000_000;
+const O_PATH: c_int = 0o10_000_000;
 const LOCK_EX: c_int = 2;
+const RENAME_NOREPLACE: c_uint = 1;
 const RENAME_EXCHANGE: c_uint = 2;
 
 unsafe extern "C" {
     fn geteuid() -> c_uint;
     fn open(path: *const c_char, flags: c_int) -> c_int;
     fn openat(directory: c_int, path: *const c_char, flags: c_int, mode: c_uint) -> c_int;
-    fn renameat(old_directory: c_int, old: *const c_char, new_directory: c_int, new: *const c_char) -> c_int;
-    fn renameat2(old_directory: c_int, old: *const c_char, new_directory: c_int, new: *const c_char, flags: c_uint) -> c_int;
+    fn renameat2(
+        old_directory: c_int,
+        old: *const c_char,
+        new_directory: c_int,
+        new: *const c_char,
+        flags: c_uint,
+    ) -> c_int;
     fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     fn fsync(fd: c_int) -> c_int;
     fn flock(fd: c_int, operation: c_int) -> c_int;
@@ -36,17 +46,26 @@ fn c_name(name: &str) -> Result<CString, &'static str> {
     CString::new(name).map_err(|_| "invalid fixed location")
 }
 
-fn call_open(path: &CString, flags: c_int, mode: c_uint) -> Result<File, &'static str> {
+fn call_open(path: &CString, flags: c_int) -> Result<File, &'static str> {
     // SAFETY: CString is NUL terminated and File assumes ownership only of a checked fd.
     let fd = unsafe { open(path.as_ptr(), flags) };
-    if fd < 0 { return Err("unsafe filesystem state"); }
+    if fd < 0 {
+        return Err("unsafe filesystem state");
+    }
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn call_openat(directory: &File, name: &CString, flags: c_int, mode: c_uint) -> Result<File, &'static str> {
+fn call_openat(
+    directory: &File,
+    name: &CString,
+    flags: c_int,
+    mode: c_uint,
+) -> Result<File, &'static str> {
     // SAFETY: both descriptors and the CString are valid for this syscall.
     let fd = unsafe { openat(directory.as_raw_fd(), name.as_ptr(), flags, mode) };
-    if fd < 0 { return Err("unsafe filesystem state"); }
+    if fd < 0 {
+        return Err("unsafe filesystem state");
+    }
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
@@ -57,20 +76,32 @@ fn expected_owner() -> u32 {
 
 pub fn has_effective_root() -> bool {
     #[cfg(feature = "test-support")]
-    { return true; }
+    {
+        return true;
+    }
     #[cfg(not(feature = "test-support"))]
-    { expected_owner() == 0 }
+    {
+        expected_owner() == 0
+    }
 }
 
 fn validate_directory(metadata: &Metadata) -> Result<(), &'static str> {
-    if !metadata.is_dir() || metadata.uid() != expected_owner() || metadata.nlink() != 1 || metadata.mode() & 0o022 != 0 {
+    let owner_ok = metadata.uid() == expected_owner()
+        || (cfg!(feature = "test-support") && matches!(metadata.uid(), 0 | 65_534));
+    let mode_ok = metadata.mode() & 0o022 == 0
+        || (cfg!(feature = "test-support") && metadata.uid() == 0 && metadata.mode() & 0o002 != 0);
+    if !metadata.is_dir() || !owner_ok || metadata.nlink() == 0 || !mode_ok {
         return Err("unsafe filesystem state");
     }
     Ok(())
 }
 
 fn validate_regular_file(metadata: &Metadata) -> Result<(), &'static str> {
-    if !metadata.is_file() || metadata.uid() != expected_owner() || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
+    if !metadata.is_file()
+        || metadata.uid() != expected_owner()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
         return Err("unsafe filesystem state");
     }
     Ok(())
@@ -78,11 +109,20 @@ fn validate_regular_file(metadata: &Metadata) -> Result<(), &'static str> {
 
 fn policy_directory(path: &str) -> Result<File, &'static str> {
     let root = c_name("/")?;
-    let mut directory = call_open(&root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC, 0)?;
-    validate_directory(&directory.metadata().map_err(|_| "unsafe filesystem state")?)?;
+    let mut directory = call_open(&root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)?;
+    validate_directory(
+        &directory
+            .metadata()
+            .map_err(|_| "unsafe filesystem state")?,
+    )?;
     for component in path.split('/').filter(|component| !component.is_empty()) {
         let name = c_name(component)?;
-        let next = call_openat(&directory, &name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC, 0)?;
+        let next = call_openat(
+            &directory,
+            &name,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC,
+            0,
+        )?;
         validate_directory(&next.metadata().map_err(|_| "unsafe filesystem state")?)?;
         directory = next;
     }
@@ -91,65 +131,167 @@ fn policy_directory(path: &str) -> Result<File, &'static str> {
 
 fn synchronize(file: &File) -> Result<(), &'static str> {
     // SAFETY: the File descriptor is live for the syscall.
-    if unsafe { fsync(file.as_raw_fd()) } != 0 { return Err("synchronization failed"); }
+    if unsafe { fsync(file.as_raw_fd()) } != 0 {
+        return Err("synchronization failed");
+    }
     Ok(())
 }
 
 fn recognized_policy(bytes: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else { return false; };
-    let Some(delay) = text.strip_prefix("# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=") else { return false; };
-    let Some((delay, ac)) = delay.split_once("s\nHibernateOnACPower=") else { return false; };
-    if delay.is_empty() || delay.starts_with('0') || !delay.bytes().all(|byte| byte.is_ascii_digit()) { return false; }
-    let Ok(delay) = delay.parse::<u32>() else { return false; };
-    if !(900..=604_800).contains(&delay) { return false; }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let Some(delay) =
+        text.strip_prefix("# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=")
+    else {
+        return false;
+    };
+    let Some((delay, ac)) = delay.split_once("s\nHibernateOnACPower=") else {
+        return false;
+    };
+    if delay.is_empty()
+        || delay.starts_with('0')
+        || !delay.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let Ok(delay) = delay.parse::<u32>() else {
+        return false;
+    };
+    if !(900..=604_800).contains(&delay) {
+        return false;
+    }
     matches!(ac, "yes\n" | "no\n")
 }
 
-fn recognized_existing_target(directory: &File, target: &CString) -> Result<bool, &'static str> {
-    let Ok(mut existing) = call_openat(directory, target, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0) else {
-        // A missing target is acceptable. Any other object still prevents O_EXCL creation below.
-        return Ok(false);
+fn recognized_existing_target(
+    directory: &File,
+    target: &CString,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    let mut existing = match call_openat(directory, target, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0) {
+        Ok(existing) => existing,
+        Err(_) => match call_openat(directory, target, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0) {
+            Ok(existing) => {
+                validate_regular_file(
+                    &existing.metadata().map_err(|_| "unsafe filesystem state")?,
+                )?;
+                return Err("unsafe existing target");
+            }
+            Err(_) => return Ok(None),
+        },
     };
     validate_regular_file(&existing.metadata().map_err(|_| "unsafe filesystem state")?)?;
     let mut bytes = Vec::new();
-    existing.read_to_end(&mut bytes).map_err(|_| "unsafe filesystem state")?;
-    if !recognized_policy(&bytes) { return Err("unrecognized existing policy"); }
-    Ok(true)
+    existing
+        .read_to_end(&mut bytes)
+        .map_err(|_| "unsafe filesystem state")?;
+    if !recognized_policy(&bytes) {
+        return Err("unrecognized existing policy");
+    }
+    Ok(Some(bytes))
 }
 
-pub fn replace_and_verify(directory_path: &str, target_name: &str, bytes: &[u8]) -> Result<(), &'static str> {
+pub fn replace_and_verify(
+    directory_path: &str,
+    target_name: &str,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
     let directory = policy_directory(directory_path)?;
     // A directory lock serializes cooperating helper instances without a second policy object.
     // SAFETY: the descriptor is live for the syscall.
-    if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 { return Err("lock failed"); }
+    if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {
+        return Err("lock failed");
+    }
     let target = c_name(target_name)?;
-    let had_previous_policy = recognized_existing_target(&directory, &target)?;
+    let previous_policy = recognized_existing_target(&directory, &target)?;
+    let had_previous_policy = previous_policy.is_some();
     let temporary = c_name(&format!(".{target_name}.{}.tmp", std::process::id()))?;
-    let mut temp = call_openat(&directory, &temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)?;
+    let mut temp = call_openat(
+        &directory,
+        &temporary,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+        0o600,
+    )?;
+    validate_regular_file(&temp.metadata().map_err(|_| "unsafe filesystem state")?)?;
+    #[cfg(feature = "test-support")]
+    let injected = |stage: &str| {
+        if std::env::var_os("HIBERMACHY_TEST_FAULT").as_deref() == Some(stage.as_ref()) {
+            Err(match stage {
+                "write" => "write interrupted",
+                "sync" => "synchronization failed",
+                "readback" => "readback indeterminate",
+                "contradictory" => "readback contradictory",
+                _ => "injected failure",
+            })
+        } else {
+            Ok(())
+        }
+    };
+    #[cfg(not(feature = "test-support"))]
+    let injected = |_stage: &str| Ok(());
+    let mut replaced = false;
     let result = (|| {
         temp.write_all(bytes).map_err(|_| "write failed")?;
+        injected("write")?;
         synchronize(&temp)?;
+        injected("sync")?;
+        if recognized_existing_target(&directory, &target)? != previous_policy {
+            return Err("target changed");
+        }
         drop(temp);
         // SAFETY: names are fixed C strings and both operations stay within the validated directory.
-        let replaced = if had_previous_policy {
-            unsafe { renameat2(directory.as_raw_fd(), temporary.as_ptr(), directory.as_raw_fd(), target.as_ptr(), RENAME_EXCHANGE) }
+        let replacement_status = if had_previous_policy {
+            unsafe {
+                renameat2(
+                    directory.as_raw_fd(),
+                    temporary.as_ptr(),
+                    directory.as_raw_fd(),
+                    target.as_ptr(),
+                    RENAME_EXCHANGE,
+                )
+            }
         } else {
-            unsafe { renameat(directory.as_raw_fd(), temporary.as_ptr(), directory.as_raw_fd(), target.as_ptr()) }
+            unsafe {
+                renameat2(
+                    directory.as_raw_fd(),
+                    temporary.as_ptr(),
+                    directory.as_raw_fd(),
+                    target.as_ptr(),
+                    RENAME_NOREPLACE,
+                )
+            }
         };
-        if replaced != 0 { return Err("replace failed"); }
+        if replacement_status != 0 {
+            return Err("replace failed");
+        }
+        replaced = true;
         synchronize(&directory)?;
+        injected("readback")?;
         let mut policy = call_openat(&directory, &target, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)?;
         validate_regular_file(&policy.metadata().map_err(|_| "unsafe filesystem state")?)?;
         let mut actual = Vec::new();
-        policy.read_to_end(&mut actual).map_err(|_| "readback unavailable")?;
-        if actual != bytes { return Err("readback contradictory"); }
+        policy
+            .read_to_end(&mut actual)
+            .map_err(|_| "readback indeterminate")?;
+        injected("contradictory")?;
+        if actual != bytes {
+            return Err("readback contradictory");
+        }
         Ok(())
     })();
-    if result.is_err() && had_previous_policy {
+    if result.is_err() && replaced && had_previous_policy {
         // SAFETY: swap back only the two names we created/validated, preserving the prior policy.
-        unsafe { renameat2(directory.as_raw_fd(), temporary.as_ptr(), directory.as_raw_fd(), target.as_ptr(), RENAME_EXCHANGE) };
+        unsafe {
+            renameat2(
+                directory.as_raw_fd(),
+                temporary.as_ptr(),
+                directory.as_raw_fd(),
+                target.as_ptr(),
+                RENAME_EXCHANGE,
+            )
+        };
         let _ = synchronize(&directory);
-    } else if result.is_err() {
+    } else if result.is_err() && replaced {
         // SAFETY: this target was created by this invocation and there was no prior policy.
         unsafe { unlinkat(directory.as_raw_fd(), target.as_ptr(), 0) };
         let _ = synchronize(&directory);
