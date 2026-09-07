@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'usage: %s status --root FIXTURE_ROOT\n' "$0" >&2
+  exit 2
+}
+
+[[ ${1:-} == status ]] || usage
+shift
+[[ ${1:-} == --root && -n ${2:-} && $# == 2 ]] || usage
+root=$2
+
+scope() {
+  local state=$1 ownership=$2 recovery=$3
+  jq -nc --arg state "$state" --arg ownership "$ownership" --arg recovery "$recovery" \
+    '{state:$state, ownership:$ownership, recovery:[$recovery]}'
+}
+
+missing_scope() { scope missing "$1" "$2"; }
+
+checkout_state() {
+  local manifest="$root/plugin/manifest.json"
+  if [[ -L "$manifest" ]]; then
+    scope inaccessible user-owned 'Resolve the checkout filesystem object before lifecycle changes.'
+  elif [[ ! -e "$manifest" && -d "$root/plugin" ]]; then
+    scope incomplete user-owned 'Complete or remove the checkout only through the native Quattro review boundary.'
+  elif [[ ! -e "$manifest" ]]; then
+    missing_scope user-owned 'Re-add the checkout through Quattro, review its source, and keep it disabled.'
+  elif [[ ! -r "$manifest" ]]; then
+    scope inaccessible user-owned 'Resolve checkout permissions before lifecycle changes.'
+  elif jq -e '(.schemaVersion == 1 and .id == "dev.hibermachy" and (.kinds | index("service")) and (.kinds | index("panel")))' "$manifest" >/dev/null 2>&1; then
+    scope compatible user-owned 'Checkout is present and can be considered by a later lifecycle operation.'
+  else
+    scope modified user-owned 'Inspect or replace the checkout through the native Quattro review boundary.'
+  fi
+}
+
+activation_state() {
+  local file="$root/activation.json"
+  if [[ -L "$file" ]]; then
+    scope inaccessible user-owned 'Resolve the activation filesystem object before lifecycle changes.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope user-owned 'Activation is absent; a later setup can offer explicit activation after probes.'
+  elif ! jq -e '(.enabled | type) == "boolean"' "$file" >/dev/null 2>&1; then
+    scope modified user-owned 'Resolve the activation record through Quattro before changing lifecycle state.'
+  else
+    jq --argjson enabled "$(jq -r .enabled "$file")" '. + {enabled:$enabled}' <<<"$(scope compatible user-owned 'Activation is independently reported; it does not enable automatic-policy enablement.')"
+  fi
+}
+
+menu_state() {
+  local file="$root/menu.json"
+  if [[ ! -e "$file" ]]; then
+    missing_scope user-owned 'Reconcile the namespaced menu contribution only after validating shared menu state.'
+  elif ! jq -e '.entries | type == "array"' "$file" >/dev/null 2>&1; then
+    scope modified user-owned 'Preserve malformed shared menu state for explicit resolution.'
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy != "hibermachy")] | length > 0' "$file" >/dev/null; then
+    scope colliding user-owned 'Preserve the colliding shared entry; do not overwrite it.'
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy" and ((.id == "setup.hibermachy" and .label == "Sleep & Hibernation" and .action == "open") or (.id == "system.hibermachy-staged-sleep" and .label == "Suspend then Hibernate" and .action == "requestStagedSleep")))] | length == 2' "$file" >/dev/null; then
+    scope compatible user-owned 'Managed entries are present; their actions still require a compatible live service.'
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' "$file" >/dev/null; then
+    scope modified user-owned 'Preserve modified managed entries until their generated shape is explicitly resolved.'
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | length > 0' "$file" >/dev/null; then
+    scope incomplete user-owned 'Reconcile both recognized entries without changing unrelated shared menu state.'
+  else
+    missing_scope user-owned 'Add only the recognized namespaced entries during setup.'
+  fi
+}
+
+helper_state() {
+  local file="$root/helper/package"
+  if [[ -L "$file" ]]; then
+    scope inaccessible machine-wide 'Resolve the helper package filesystem object before invoking it.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope machine-wide 'Build and install the helper through the normal package manager before policy recovery.'
+  elif [[ ! -r "$file" ]]; then
+    scope inaccessible machine-wide 'Resolve helper package ownership and permissions before invoking it.'
+  elif grep -Eq '^package=hibermachy-helper version=[0-9]+\.[0-9]+\.[0-9]+$' "$file"; then
+    scope compatible machine-wide 'Helper package is independently present; it does not prove requested policy is applied.'
+  else
+    scope modified machine-wide 'Reinstall or inspect the helper through the package manager; do not replace it in place.'
+  fi
+}
+
+protocol_state() {
+  local file="$root/helper/protocol"
+  if [[ -L "$file" ]]; then
+    scope inaccessible machine-wide 'Resolve the helper protocol filesystem object before probing it.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope machine-wide 'Install a helper with an overlapping protocol range before helper-backed operations.'
+  elif ! grep -Eq '^protocol-min=[0-9]+ protocol-max=[0-9]+$' "$file"; then
+    scope modified machine-wide 'Probe the helper again; malformed protocol state is not actionable.'
+  elif grep -Eq '^protocol-min=([0-9]|1) protocol-max=([1-9][0-9]*)$' "$file" && \
+      awk -F'[ =]' '{ exit !($2 <= 1 && $4 >= 1) }' "$file"; then
+    scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
+  else
+    scope mismatched machine-wide 'Install a helper whose declared protocol range overlaps this checkout.'
+  fi
+}
+
+user_data_state() {
+  local config="$root/user/config.json" state="$root/user/state.json"
+  if [[ -L "$config" || -L "$state" ]]; then
+    scope inaccessible user-owned 'Preserve suspicious user-data objects for explicit resolution.'
+  elif [[ ! -e "$config" && ! -e "$state" ]]; then
+    missing_scope user-owned 'No retained user configuration or outcome state is present.'
+  elif [[ ! -e "$config" || ! -e "$state" ]]; then
+    scope incomplete user-owned 'Retain the partial user-data scope and complete inventory before any purge.'
+  elif [[ -r "$config" && -r "$state" ]]; then
+    scope compatible user-owned 'Retain user configuration and state through plugin removal and uninstall; purge is separate.'
+  else
+    scope inaccessible user-owned 'Preserve and resolve user-data permissions before any destructive purge.'
+  fi
+}
+
+policy_state() {
+  local file="$root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
+  local expected=$'# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=3600s\nHibernateOnACPower=no'
+  if [[ -L "$file" ]]; then
+    scope inaccessible machine-wide 'Preserve the suspicious requested-policy filesystem object.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope machine-wide 'No requested system policy is present; no reset is needed.'
+  elif [[ -L "$file" || ! -f "$file" || ! -r "$file" ]]; then
+    scope inaccessible machine-wide 'Preserve the target and resolve its filesystem type, ownership, and permissions.'
+  elif [[ "$(<"$file")" == "$expected" ]]; then
+    scope compatible machine-wide 'Recognized requested policy can be reset only with fresh authenticated authorization.'
+  elif grep -q '^# Managed by Hibermachy\. Do not edit\.$' "$file"; then
+    scope modified machine-wide 'Do not overwrite modified managed policy; inspect and explicitly resolve it.'
+  else
+    scope unrecognized machine-wide 'Leave administrator-owned or shared policy untouched; resolve it explicitly.'
+  fi
+}
+
+owned_target_state() {
+  local file="$root/etc/systemd/sleep.conf.d/90-hibermachy.conf"
+  if [[ -L "$file" ]]; then
+    scope inaccessible machine-wide 'Do not follow or replace a suspicious owned target.'
+  elif [[ ! -e "$file" ]]; then
+    missing_scope machine-wide 'Owned target is absent and can be recreated only by authenticated policy apply.'
+  elif [[ -L "$file" || ! -f "$file" || ! -r "$file" ]]; then
+    scope inaccessible machine-wide 'Do not follow or replace a suspicious owned target.'
+  else
+    scope compatible machine-wide 'Target exists; requested-policy content and effective policy remain separate observations.'
+  fi
+}
+
+owner_json=$(if [[ -r "$root/installation-owner" ]] && owner=$(<"$root/installation-owner") && [[ $owner == owner=* && ${#owner} -gt 6 ]]; then
+  jq -nc --arg owner "${owner#owner=}" '{state:"identified", artifacts:"user-owned", name:$owner}'
+else
+  jq -nc '{state:"unrecognized", artifacts:"user-owned", recovery:["Identify the single installation owner before machine-wide lifecycle changes."]}'
+fi)
+
+scopes_json=$(jq -nc \
+  --argjson checkout "$(checkout_state)" \
+  --argjson activation "$(activation_state)" \
+  --argjson menu "$(menu_state)" \
+  --argjson helper "$(helper_state)" \
+  --argjson protocol "$(protocol_state)" \
+  --argjson user_data "$(user_data_state)" \
+  --argjson policy "$(policy_state)" \
+  --argjson target "$(owned_target_state)" \
+  '{checkout:$checkout, activation:$activation, menu_contribution:$menu, helper_package:$helper, helper_protocol:$protocol, user_configuration_state:$user_data, requested_system_policy:$policy, owned_target:$target}')
+
+jq -n \
+  --argjson owner "$owner_json" \
+  --argjson scopes "$scopes_json" \
+  '{schemaVersion:1, installationOwner:$owner, scopes:$scopes,
+    glossary:[
+      "plugin activation is distinct from automatic-policy enablement",
+      "plugin removal removes only the user-owned checkout",
+      "Hibermachy uninstall removes executable artifacts but retains user configuration and state",
+      "Hibermachy purge additionally removes retained user configuration and state"
+    ],
+    actionable: ([ $scopes[] | select(.state != "compatible" and .state != "missing") ] | length > 0)}'
