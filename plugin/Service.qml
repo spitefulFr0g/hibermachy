@@ -30,6 +30,9 @@ Item {
   property bool policyAccepted: false
   property string policyReasonCode: "HBR-POLICY-LOADING"
   property string lastObservedPolicyText: ""
+  property bool policyWriteInFlight: false
+  property var pendingUserPolicy: null
+  property bool policyDirectoryWritable: true
   property var systemPolicyDraft: ({ hibernateDelaySeconds: 7200, hibernateOnAcPower: false, scope: "machine-wide" })
   property var requestedSystemPolicy: null
   property var effectiveSystemPolicy: null
@@ -330,9 +333,13 @@ Item {
       && typeof value.hibernateOnAcPower === "boolean"
   }
 
-  function loadUserPolicy(raw): void {
+  function loadUserPolicy(raw, bytes): void {
     lastObservedPolicyText = String(raw || "")
-    if (String(raw).length > 16384) { policyAccepted = false; policyReasonCode = "HBR-POLICY-SIZE"; return }
+    if ((bytes && bytes.byteLength > 16384) || String(raw).length > 16384) { policyAccepted = false; policyReasonCode = "HBR-POLICY-SIZE"; return }
+    if (bytes && bytes.byteLength >= 3) {
+      var octets = new Uint8Array(bytes)
+      if (octets[0] === 0xEF && octets[1] === 0xBB && octets[2] === 0xBF) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
+    }
     if (String(raw).charCodeAt(0) === 0xFEFF || String(raw).indexOf("\uFFFD") >= 0) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
     if ((String(raw).match(/"revision"\s*:/g) || []).length > 1) {
       policyAccepted = false
@@ -352,17 +359,20 @@ Item {
       if (policySnapshot && (value.automaticPolicyEnabled !== policySnapshot.automaticPolicyEnabled || value.idleDelaySeconds !== policySnapshot.idleDelaySeconds)) {
         value.revision = value.revision === Number.MAX_SAFE_INTEGER ? value.revision : value.revision + 1
       }
+      var persistenceBlocked = policyReasonCode === "HBR-POLICY-PERSISTENCE"
       var canonical = JSON.stringify({ version: 1, revision: value.revision,
         automaticPolicyEnabled: value.automaticPolicyEnabled, idleDelaySeconds: value.idleDelaySeconds }, null, 2) + "\n"
       if (String(raw) !== canonical) policyFile.setText(canonical)
       policySnapshot = value
-      policyReasonCode = value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
+      policyReasonCode = !policyDirectoryWritable || persistenceBlocked
+        ? "HBR-POLICY-PERSISTENCE"
+        : (value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED")
     } catch (error) {
       if (String(raw || "").trim() === "") {
         policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
         policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
         policyAccepted = true
-        policyReasonCode = "HBR-POLICY-DISABLED"
+        policyReasonCode = policyDirectoryWritable ? "HBR-POLICY-DISABLED" : "HBR-POLICY-PERSISTENCE"
         return
       }
       policyAccepted = false
@@ -377,7 +387,12 @@ Item {
   function userPolicy(): string { return JSON.stringify(policySnapshot || {}) }
 
   function saveUserPolicy(requestJson): string {
-    if (!policyAccepted || !policySnapshot) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-UNAVAILABLE" })
+    if (!policyDirectoryWritable) {
+      policyAccepted = false
+      policyReasonCode = "HBR-POLICY-PERSISTENCE"
+      return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-PERSISTENCE", policy: policySnapshot })
+    }
+    if (policyWriteInFlight || !policyAccepted || !policySnapshot) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-UNAVAILABLE" })
     var request
     try { request = JSON.parse(String(requestJson)) } catch (error) { return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-MUTATION-MALFORMED" }) }
     if (request.baseRevision !== policySnapshot.revision) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-STALE", policy: policySnapshot })
@@ -386,11 +401,14 @@ Item {
       return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-MUTATION-INVALID", policy: policySnapshot })
     if (policySnapshot.revision === Number.MAX_SAFE_INTEGER)
       return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-REVISION-EXHAUSTED", policy: policySnapshot })
-    policySnapshot = { version: 1, revision: policySnapshot.revision + 1,
+    pendingUserPolicy = { version: 1, revision: policySnapshot.revision + 1,
       automaticPolicyEnabled: request.automaticPolicyEnabled, idleDelaySeconds: request.idleDelaySeconds }
-    policyReasonCode = policySnapshot.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
-    policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
-    return JSON.stringify({ accepted: true, reasonCode: "HBR-POLICY-SAVED", policy: policySnapshot })
+    policyWriteInFlight = true
+    policyFile.setText(JSON.stringify(pendingUserPolicy, null, 2) + "\n")
+    var saved = policyFile.waitForJob()
+    return JSON.stringify({ accepted: saved,
+      reasonCode: saved ? "HBR-POLICY-SAVED" : "HBR-POLICY-PERSISTENCE",
+      policy: policyWriteInFlight ? policySnapshot : pendingUserPolicy })
   }
 
   function resetUserPolicy(): string {
@@ -580,26 +598,45 @@ Item {
     atomicWrites: true
     watchChanges: true
     printErrors: false
-    onLoaded: root.loadUserPolicy(text())
+    onLoaded: root.loadUserPolicy(text(), data())
     onLoadFailed: root.loadUserPolicy("")
+    onSaved: {
+      if (root.pendingUserPolicy) {
+        root.policySnapshot = root.pendingUserPolicy
+        root.policyReasonCode = root.pendingUserPolicy.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
+      }
+      root.pendingUserPolicy = null
+      root.policyWriteInFlight = false
+    }
+    onSaveFailed: {
+      root.pendingUserPolicy = null
+      root.policyWriteInFlight = false
+      root.policyAccepted = false
+      root.policyReasonCode = "HBR-POLICY-PERSISTENCE"
+    }
+    onFileChanged: reload()
   }
 
   Timer {
     interval: 100
     repeat: true
     running: true
-    onTriggered: {
-      if (!policyReader.running) policyReader.running = true
-    }
+    onTriggered: policyFile.reload()
+  }
+
+  Timer {
+    interval: 100
+    repeat: true
+    running: true
+    onTriggered: if (!policyPermissionProbe.running) policyPermissionProbe.running = true
   }
 
   Process {
-    id: policyReader
-    command: ["cat", root.policyPath]
-    stdout: StdioCollector { id: policyReaderStdout; waitForEnd: true }
+    id: policyPermissionProbe
+    command: ["/bin/sh", "-c", "mode=$(stat -c %a \"$1\") || exit 1; case \"$mode\" in 2*|3*|6*|7*) exit 0;; *) exit 1;; esac", "hibermachy-policy-permission", root.policyDirectory]
     onExited: function(exitCode) {
-      if (exitCode === 0 && policyReaderStdout.text !== root.lastObservedPolicyText)
-        root.loadUserPolicy(policyReaderStdout.text)
+      root.policyDirectoryWritable = exitCode === 0
+      if (exitCode !== 0 && root.policyAccepted) root.policyReasonCode = "HBR-POLICY-PERSISTENCE"
     }
   }
 

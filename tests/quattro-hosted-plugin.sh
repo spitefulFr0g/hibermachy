@@ -404,6 +404,11 @@ wait_for_policy 9 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-011 atomic replacement failure preserves the current snapshot'
 chmod 500 "${policy_path%/*}"
+for _ in $(seq 1 20); do
+  status=$(status_json)
+  if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.reasonCode==="HBR-POLICY-PERSISTENCE" ? 0 : 1)' "$status"; then break; fi
+  sleep 0.1
+done
 receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":9,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
 assert_receipt "$receipt" false HBR-POLICY-PERSISTENCE
 sleep 0.3
