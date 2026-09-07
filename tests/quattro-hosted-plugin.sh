@@ -2,11 +2,19 @@
 set -euo pipefail
 
 if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
-  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_TEST_PANEL_KEYS=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
-  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_TEST_PANEL_KEYS=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Completed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend HIBERMACHY_EXPECTED_OUTCOME=Degraded "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=early-wake HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Completed HIBERMACHY_EXPECTED_OUTCOME_REASON=HBR-SLEEP-EARLY-WAKE "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Failed HIBERMACHY_EXPECTED_EVIDENCE=typed-unit-result "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=missing HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Indeterminate HIBERMACHY_EXPECTED_EVIDENCE=missing-typed-evidence "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=contradictory HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Indeterminate HIBERMACHY_EXPECTED_EVIDENCE=contradictory-typed-evidence "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_SIM_SUSPEND=0 HIBERMACHY_EXPECTED_KIND=refused HIBERMACHY_EXPECTED_REASON=HBR-SLEEP-NOT-EXECUTABLE "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused HIBERMACHY_EXPECTED_REASON=HBR-SLEEP-SYSTEM-INHIBITED "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed HIBERMACHY_EXPECTED_REASON=HBR-SLEEP-OBSERVATION-FAILED "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_LATCH_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed HIBERMACHY_EXPECTED_REASON=HBR-HISTORY-REARM-PERSISTENCE-FAILED "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_HISTORY_FAILURE=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Completed HIBERMACHY_EXPECT_HISTORY_HEALTH=degraded "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE HIBERMACHY_EXPECT_SUPPRESSED=1 "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_OPEN_BOOT=prior-boot HIBERMACHY_EXPECT_BOOT_CHANGE=1 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_HOLD_BUSY=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECT_BUSY=1 "$0"
   exit 0
 fi
@@ -35,6 +43,18 @@ on_exit() {
 trap on_exit EXIT
 
 mkdir -p "$test_root/.config/omarchy/plugins"
+mkdir -p "$test_root/.local/state/hibermachy"
+if [[ -n "${HIBERMACHY_SEED_OPEN_BOOT:-}" ]]; then
+  node -e '
+    const fs = require("fs");
+    const bootId = process.argv[2];
+    fs.writeFileSync(process.argv[1], JSON.stringify({
+      schemaVersion: 1,
+      openAttempt: { attemptId: "prior-attempt", origin: "manual", selectedMode: "suspend-then-hibernate", bootId },
+      terminalOutcomes: [], suppressionSummaries: [], notificationFingerprints: []
+    }, null, 2) + "\n");
+  ' "$test_root/.local/state/hibermachy/outcomes.json" "$HIBERMACHY_SEED_OPEN_BOOT"
+fi
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
 
@@ -62,7 +82,7 @@ status_json() {
   local result=''
   for _ in $(seq 1 50); do
     result=$(call "$plugin_id" status 2>/dev/null || true)
-    if [[ "$result" == \{* ]]; then
+    if [[ "$result" == \{* ]] && node -e 'process.exit(JSON.parse(process.argv[1]).historyLoaded ? 0 : 1)' "$result"; then
       printf '%s\n' "$result"
       return 0
     fi
@@ -104,6 +124,30 @@ status=$(status_json)
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
 
+if [[ "${HIBERMACHY_EXPECT_BOOT_CHANGE:-}" == '1' ]]; then
+  printf '%s\n' 'HBR-CHK-OUTCOME-007 boot change finalizes open attempt without replay'
+  node -e '
+    const status = JSON.parse(process.argv[1]);
+    const outcome = status.outcomeHistory.at(-1);
+    if (status.openAttempt !== null || !status.rearmRequired || status.executionInProgress) process.exit(1);
+    if (!outcome || outcome.outcome !== "Indeterminate" || outcome.reasonCode !== "HBR-SLEEP-BOOT-CHANGED") process.exit(1);
+    if (status.simulatedSleepSubmissionCount !== 0 || outcome.details.requestReplayed !== false) process.exit(1);
+  ' "$status"
+  exit 0
+fi
+
+if [[ "${HIBERMACHY_EXPECT_SUPPRESSED:-}" == '1' ]]; then
+  printf '%s\n' 'HBR-CHK-OUTCOME-008 automatic suppression stays distinct and coalesced'
+  node -e '
+    const status = JSON.parse(process.argv[1]);
+    const outcome = status.outcomeHistory.at(-1);
+    if (!outcome || outcome.outcome !== "Suppressed" || outcome.origin !== "automatic") process.exit(1);
+    if (status.suppressionSummaries.length !== 1 || status.suppressionSummaries[0].count !== 1) process.exit(1);
+    if (status.simulatedSleepSubmissionCount !== 0) process.exit(1);
+  ' "$status"
+  exit 0
+fi
+
 printf '%s\n' 'HBR-CHK-MANUAL-001 public manual request accepts simulated staged sleep'
 receipt=$(call "$plugin_id" requestStagedSleep)
 node -e '
@@ -129,7 +173,19 @@ node -e '
   if (status.manualConfirmationKind !== expectedConfirmation) process.exit(1);
   if (expectedKind === "accepted" && (status.lastSubmission.attemptId !== "manual-1" || status.lastSubmission.selectedMode !== expectedMode || status.simulatedSleepSubmissionCount !== 1)) process.exit(1);
   if (expectedKind !== "accepted" && (status.lastSubmission !== null || status.simulatedSleepSubmissionCount !== 0)) process.exit(1);
-' "$status" "$HIBERMACHY_EXPECTED_KIND" "${HIBERMACHY_EXPECTED_MODE:-}" "${HIBERMACHY_EXPECT_BUSY:-}"
+  const expectedOutcome = process.argv[5];
+  if (expectedOutcome) {
+    if (status.openAttempt !== null || status.outcomeHistory.length !== 1) process.exit(1);
+    const outcome = status.outcomeHistory[0];
+    if (outcome.outcome !== expectedOutcome || outcome.evidenceLevel !== (process.argv[6] || "typed-transaction-return")) process.exit(1);
+    if (outcome.requestedMode !== "suspend-then-hibernate" || outcome.selectedMode !== expectedMode) process.exit(1);
+    if (outcome.operation !== "staged-sleep" || outcome.origin !== "manual" || outcome.phase !== "outcome-reconciliation") process.exit(1);
+    if (outcome.details.hibernationConfirmed !== false) process.exit(1);
+    if (!outcome.eventId || !outcome.correlationId || !outcome.bootId || !outcome.serviceGeneration || outcome.schemaVersion !== 1) process.exit(1);
+    if (process.argv[7] && outcome.reasonCode !== process.argv[7]) process.exit(1);
+  }
+  if (process.argv[8] && status.historyHealth !== process.argv[8]) process.exit(1);
+' "$status" "$HIBERMACHY_EXPECTED_KIND" "${HIBERMACHY_EXPECTED_MODE:-}" "${HIBERMACHY_EXPECT_BUSY:-}" "${HIBERMACHY_EXPECTED_OUTCOME:-}" "${HIBERMACHY_EXPECTED_EVIDENCE:-}" "${HIBERMACHY_EXPECTED_OUTCOME_REASON:-}" "${HIBERMACHY_EXPECT_HISTORY_HEALTH:-}"
 
 if [[ "${HIBERMACHY_EXPECT_BUSY:-}" == '1' ]]; then
   printf '%s\n' 'HBR-CHK-MANUAL-002 concurrent request receives typed busy refusal'
@@ -138,6 +194,19 @@ if [[ "${HIBERMACHY_EXPECT_BUSY:-}" == '1' ]]; then
     const receipt = JSON.parse(process.argv[1]);
     if (receipt.kind !== "refused" || receipt.reasonCode !== "HBR-SLEEP-BUSY") process.exit(1);
   ' "$busy_receipt"
+
+  printf '%s\n' 'HBR-CHK-OUTCOME-006 reload finalizes open attempt without replay'
+  call shell setPluginEnabled "$plugin_id" false | grep -qx 'ok'
+  call shell setPluginEnabled "$plugin_id" true | grep -qx 'ok'
+  status=$(status_json)
+  node -e '
+    const status = JSON.parse(process.argv[1]);
+    if (status.executionInProgress || status.openAttempt !== null || !status.rearmRequired) process.exit(1);
+    const outcome = status.outcomeHistory.at(-1);
+    if (outcome.outcome !== "Indeterminate" || outcome.reasonCode !== "HBR-SLEEP-SERVICE-RECREATED") process.exit(1);
+    if (outcome.details.requestReplayed !== false || outcome.details.liveStateRestored !== false) process.exit(1);
+    if (status.simulatedSleepSubmissionCount !== 0) process.exit(1);
+  ' "$status"
 fi
 
 if [[ "${HIBERMACHY_TEST_PANEL_KEYS:-}" == '1' ]]; then
