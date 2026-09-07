@@ -260,6 +260,10 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
             return Err("remove failed");
         }
         moved = true;
+        let moved_policy = recognized_existing_target(&directory, &temporary)?;
+        if moved_policy.as_deref() != Some(previous_policy.as_slice()) {
+            return Err("target changed");
+        }
         inject_fault("remove")?;
         synchronize(&directory)?;
         inject_fault("sync")?;
@@ -281,8 +285,10 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
     if result.is_err() && moved {
         let restored = if removed {
             restore_removed_policy(&directory, &target, &previous_policy, &temporary_suffix)
-        } else {
-            // SAFETY: restore the complete recognized policy to its original fixed name.
+        } else if recognized_existing_target(&directory, &temporary)?.as_deref()
+            == Some(previous_policy.as_slice())
+        {
+            // SAFETY: the temporary still contains the exact recognized policy.
             (unsafe {
                 renameat2(
                     directory.as_raw_fd(),
@@ -293,6 +299,10 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
                 )
             } == 0)
                 && synchronize(&directory).is_ok()
+        } else {
+            // Leave a substituted or unfamiliar temporary untouched and recreate
+            // the prior policy under an exclusive recovery name.
+            restore_removed_policy(&directory, &target, &previous_policy, &temporary_suffix)
         };
         if !restored {
             return Err("rollback failed");
