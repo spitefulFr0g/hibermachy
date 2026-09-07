@@ -7,6 +7,7 @@ Item {
 
   readonly property string stateDirectory: String(Quickshell.env("HIBERMACHY_STATE_DIR") || Quickshell.env("HOME") + "/.local/state/hibermachy")
   readonly property string historyPath: stateDirectory + "/outcomes.json"
+  readonly property string openAttemptPath: stateDirectory + "/open-attempt.json"
   readonly property string latchPath: stateDirectory + "/rearm-latch.json"
   readonly property string bootId: String(Quickshell.env("HIBERMACHY_SIM_BOOT_ID") || "simulated-boot")
   readonly property string serviceGeneration: "service-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)
@@ -36,7 +37,8 @@ Item {
     historyLoaded: historyLoaded,
     historyHealth: historyHealthy ? "healthy" : "degraded",
     openAttempt: historyDocument.openAttempt,
-    outcomeHistory: historyDocument.terminalOutcomes,
+    outcomeHistory: historyDocument.terminalOutcomes.slice(-20),
+    outcomeHistoryCount: historyDocument.terminalOutcomes.length,
     suppressionSummaries: historyDocument.suppressionSummaries,
     notificationFingerprints: historyDocument.notificationFingerprints,
     simulatedSleepSubmissionCount: simulatedSleepSubmissionCount,
@@ -111,6 +113,7 @@ Item {
     if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) {
       historyHealthy = false
       historyLoaded = true
+      openAttemptFile.reload()
       return
     }
     if (String(raw || "").trim() !== "") {
@@ -125,6 +128,7 @@ Item {
       }
     }
     historyLoaded = true
+    openAttemptFile.reload()
     reconcileRecoveredAttempt()
     recordSimulatedSuppression()
     nextAttemptNumber = Math.max(nextAttemptNumber, historyDocument.terminalOutcomes.length + 1)
@@ -145,6 +149,20 @@ Item {
     }
     historyFile.setText(JSON.stringify(historyDocument, null, 2) + "\n")
     return true
+  }
+
+  function persistOpenAttempt(attempt): void {
+    openAttemptFile.setText(JSON.stringify({ schemaVersion: 1, openAttempt: attempt }, null, 2) + "\n")
+  }
+
+  function loadOpenAttempt(raw): void {
+    if (!raw || String(raw).trim() === "") return
+    try {
+      var parsed = JSON.parse(raw)
+      if (parsed.schemaVersion !== 1 || !parsed.openAttempt) return
+      if (!historyDocument.openAttempt) historyDocument.openAttempt = parsed.openAttempt
+      if (historyLoaded && historyDocument.openAttempt) reconcileRecoveredAttempt()
+    } catch (error) { historyHealthy = false }
   }
 
   function persistLatch(): bool {
@@ -175,6 +193,7 @@ Item {
     next.notificationFingerprints = next.notificationFingerprints.slice(-64)
     historyDocument = next
     persistHistory()
+    persistOpenAttempt(null)
   }
 
   function reconcileRecoveredAttempt(): void {
@@ -253,10 +272,12 @@ Item {
     var next = clone(historyDocument)
     next.openAttempt = openAttempt
     historyDocument = next
+    persistOpenAttempt(openAttempt)
     persistHistory()
 
     lastSubmission = { attemptId: attemptId, origin: origin, requestedMode: "suspend-then-hibernate",
-      selectedMode: selectedMode, selectionPath: selectionPath, simulated: true }
+      selectedMode: selectedMode, selectionPath: selectionPath, simulated: true,
+      openAttemptPersistedBeforeEnqueue: true, evidenceSubscribedBeforeEnqueue: true }
     simulatedSleepSubmissionCount += 1
 
     var observed = evidenceResult(selectionPath)
@@ -265,7 +286,9 @@ Item {
         observed.outcome, observed.reason, observed.evidence, {
           hibernationConfirmed: false, entryEvidenceWindowMs: entryEvidenceWindowMs,
           postResumeEvidenceWindowMs: postResumeEvidenceWindowMs,
-          userspaceFreezeExcludedFromDeadline: true, freeFormJournalUsedForState: false
+          userspaceFreezeExcludedFromDeadline: true, freeFormJournalUsedForState: false,
+          evidenceSubscribedBeforeEnqueue: true,
+          evidencePhases: ["entry", "resume", "transaction-return"]
         }))
       executionInProgress = false
     }
@@ -285,6 +308,15 @@ Item {
     printErrors: false
     onLoaded: root.loadHistory(text())
     onLoadFailed: root.loadHistory("")
+  }
+
+  FileView {
+    id: openAttemptFile
+    path: root.openAttemptPath
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.loadOpenAttempt(text())
+    onLoadFailed: root.loadOpenAttempt("")
   }
 
   FileView {
