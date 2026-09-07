@@ -51,7 +51,31 @@ activation_state() {
 
 menu_state() {
   local file="$root/menu.json"
-  menu_document() { sed -E 's#^[[:space:]]*//.*$##; s#//.*$##' "$file"; }
+  menu_document() {
+    awk 'BEGIN { in_string = 0; escaped = 0; in_comment = 0 }
+      {
+        output = ""
+        for (i = 1; i <= length($0); i++) {
+          character = substr($0, i, 1)
+          next_character = substr($0, i + 1, 1)
+          if (in_comment) continue
+          if (in_string) {
+            output = output character
+            if (escaped) escaped = 0
+            else if (character == "\\") escaped = 1
+            else if (character == "\"") in_string = 0
+          } else if (character == "\"") {
+            in_string = 1
+            output = output character
+          } else if (character == "/" && next_character == "/") {
+            in_comment = 1
+            i++
+          } else output = output character
+        }
+        in_comment = 0
+        print output
+      }' "$file"
+  }
   if [[ -L "$file" ]]; then
     scope inaccessible user-owned 'Preserve a suspicious shared menu filesystem object for explicit resolution.'
   elif [[ ! -e "$file" ]]; then
@@ -106,7 +130,7 @@ protocol_state() {
     helper_release=$(sed -n 's/^package=hibermachy-helper version=//p' "$root/helper/package" 2>/dev/null || true)
     [[ -n "$helper_release" ]] || helper_release=$(sed -n 's/^release=\([^ ]*\).*/\1/p' "$file")
     checkout_release=$(jq -r '.version // "unknown"' "$root/plugin/manifest.json" 2>/dev/null || printf '%s' unknown)
-    if [[ -n "$checkout_min" && -n "$checkout_max" ]] && awk -v hmin="$helper_min" -v hmax="$helper_max" -v cmin="$checkout_min" -v cmax="$checkout_max" 'BEGIN { exit !(hmin <= cmax && hmax >= cmin) }'; then
+    if [[ -n "$checkout_min" && -n "$checkout_max" ]] && awk -v hmin="$helper_min" -v hmax="$helper_max" -v cmin="$checkout_min" -v cmax="$checkout_max" 'BEGIN { exit !(hmin <= hmax && cmin <= cmax && hmin <= cmax && hmax >= cmin) }'; then
       scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
     else
     jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
@@ -142,7 +166,7 @@ user_data_state() {
     missing_scope user-owned 'No retained user configuration or outcome state is present.'
   elif [[ ! -e "$config" || ! -e "$state" ]]; then
     scope incomplete user-owned 'Retain the partial user-data scope and complete inventory before any purge.'
-  elif ! jq -e 'type == "object" and .schemaVersion == 1 and .revision >= 1 and (.automaticPolicyEnablement | type == "boolean") and (.idleDelaySeconds >= 300 and .idleDelaySeconds <= 86400)' "$config" >/dev/null 2>&1 || \
+  elif ! jq -e 'type == "object" and (keys_unsorted | sort == ["automaticPolicyEnablement", "idleDelaySeconds", "revision", "schemaVersion"]) and .schemaVersion == 1 and (.revision | type == "number" and floor == . and . >= 1) and (.automaticPolicyEnablement | type == "boolean") and (.idleDelaySeconds | type == "number" and floor == . and . >= 300 and . <= 86400)' "$config" >/dev/null 2>&1 || \
       ! jq -e 'type == "object" and .version == 1' "$state" >/dev/null 2>&1; then
     scope modified user-owned 'Preserve malformed or foreign user configuration/state for explicit recovery.'
   elif [[ -r "$config" && -r "$state" ]]; then
@@ -227,4 +251,4 @@ jq -n \
       "Hibermachy uninstall removes executable artifacts but retains user configuration and state",
       "Hibermachy purge additionally removes retained user configuration and state"
     ],
-    actionable: (($owner.state != "identified") or ([ $scopes[] | select(.state != "compatible" and .state != "missing") ] | length > 0))}'
+    actionable: (($owner.state != "identified") or ([ $scopes[] | select(.state != "compatible") ] | length > 0))}'
