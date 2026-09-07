@@ -67,12 +67,15 @@ fn run() -> Result<(), &'static str> {
     }
     let arguments: Vec<String> = env::args().skip(1).collect();
     let (command, values) = arguments.split_first().ok_or("invalid command")?;
-    if command != "apply" {
-        return Err("invalid command");
+    match command.as_str() {
+        "apply" => {
+            let policy = parse_apply(values)?;
+            let bytes = policy.recognized_bytes();
+            secure_fs::replace_and_verify(POLICY_DIRECTORY, TARGET_NAME, bytes.as_bytes())
+        }
+        "reset" if values.is_empty() => secure_fs::remove_and_verify(POLICY_DIRECTORY, TARGET_NAME),
+        _ => Err("invalid command"),
     }
-    let policy = parse_apply(values)?;
-    let bytes = policy.recognized_bytes();
-    secure_fs::replace_and_verify(POLICY_DIRECTORY, TARGET_NAME, bytes.as_bytes())
 }
 
 fn main() -> ExitCode {

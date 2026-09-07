@@ -22,6 +22,7 @@ const O_DIRECTORY: c_int = 0o200_000;
 const O_NOFOLLOW: c_int = 0o400_000;
 const O_CLOEXEC: c_int = 0o2_000_000;
 const O_PATH: c_int = 0o10_000_000;
+const O_NONBLOCK: c_int = 0o4_000;
 const LOCK_EX: c_int = 2;
 const RENAME_NOREPLACE: c_uint = 1;
 const RENAME_EXCHANGE: c_uint = 2;
@@ -77,7 +78,7 @@ fn expected_owner() -> u32 {
 pub fn has_effective_root() -> bool {
     #[cfg(feature = "test-support")]
     {
-        return true;
+        true
     }
     #[cfg(not(feature = "test-support"))]
     {
@@ -168,7 +169,12 @@ fn recognized_existing_target(
     directory: &File,
     target: &CString,
 ) -> Result<Option<Vec<u8>>, &'static str> {
-    let mut existing = match call_openat(directory, target, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0) {
+    let mut existing = match call_openat(
+        directory,
+        target,
+        O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
+        0,
+    ) {
         Ok(existing) => existing,
         Err(_) => match call_openat(directory, target, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0) {
             Ok(existing) => {
@@ -189,6 +195,83 @@ fn recognized_existing_target(
         return Err("unrecognized existing policy");
     }
     Ok(Some(bytes))
+}
+
+#[cfg(feature = "test-support")]
+fn inject_reset_fault(stage: &str) -> Result<(), &'static str> {
+    if std::env::var_os("HIBERMACHY_TEST_FAULT").as_deref() == Some(stage.as_ref()) {
+        return Err(match stage {
+            "remove" => "removal interrupted",
+            "sync" => "synchronization failed",
+            "readback" => "readback indeterminate",
+            "contradictory" => "readback contradictory",
+            _ => "injected failure",
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "test-support"))]
+fn inject_reset_fault(_stage: &str) -> Result<(), &'static str> {
+    Ok(())
+}
+
+pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), &'static str> {
+    let directory = policy_directory(directory_path)?;
+    // SAFETY: the descriptor is live for the syscall.
+    if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {
+        return Err("lock failed");
+    }
+    let target = c_name(target_name)?;
+    if recognized_existing_target(&directory, &target)?.is_none() {
+        return Ok(());
+    }
+    let temporary = c_name(&format!(".{target_name}.{}.reset.tmp", std::process::id()))?;
+    let mut moved = false;
+    let result = (|| {
+        // SAFETY: both names are fixed invocation-local names within the validated directory.
+        if unsafe {
+            renameat2(
+                directory.as_raw_fd(),
+                target.as_ptr(),
+                directory.as_raw_fd(),
+                temporary.as_ptr(),
+                0,
+            )
+        } != 0
+        {
+            return Err("remove failed");
+        }
+        moved = true;
+        inject_reset_fault("remove")?;
+        synchronize(&directory)?;
+        inject_reset_fault("sync")?;
+        if recognized_existing_target(&directory, &target)?.is_some() {
+            return Err("readback contradictory");
+        }
+        inject_reset_fault("readback")?;
+        inject_reset_fault("contradictory")?;
+        // SAFETY: only the temporary object created by this invocation is removed.
+        if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
+            return Err("remove failed");
+        }
+        synchronize(&directory)?;
+        Ok(())
+    })();
+    if result.is_err() && moved {
+        // SAFETY: restore the complete recognized policy to its original fixed name.
+        unsafe {
+            renameat2(
+                directory.as_raw_fd(),
+                temporary.as_ptr(),
+                directory.as_raw_fd(),
+                target.as_ptr(),
+                0,
+            )
+        };
+        let _ = synchronize(&directory);
+    }
+    result
 }
 
 pub fn replace_and_verify(

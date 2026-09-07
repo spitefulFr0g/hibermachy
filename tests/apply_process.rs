@@ -69,6 +69,12 @@ fn prepare_policy_directory() -> std::path::PathBuf {
     target
 }
 
+fn recognized_policy(delay: &str, ac: &str) -> String {
+    format!(
+        "# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec={delay}s\nHibernateOnACPower={ac}\n"
+    )
+}
+
 #[test]
 fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
     let _guard = test_lock();
@@ -85,6 +91,171 @@ fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
         fs::read_to_string(target).unwrap(),
         "# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=900s\nHibernateOnACPower=no\n"
     );
+}
+
+#[test]
+fn reset_is_idempotent_for_absent_target_and_removes_a_canonical_policy() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+
+    let absent = run(&["reset"]);
+    assert!(
+        absent.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&absent.stderr)
+    );
+    fs::write(&target, recognized_policy("900", "no")).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let removed = run(&["reset"]);
+    assert!(
+        removed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(!target.exists());
+    assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
+    assert!(run(&["reset"]).status.success());
+}
+
+#[test]
+fn reset_rejects_unrecognized_content_without_deleting_it() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    fs::write(&target, "administrator-owned content\n").unwrap();
+
+    let result = run(&["reset"]);
+
+    assert!(!result.status.success());
+    assert_eq!(
+        fs::read_to_string(target).unwrap(),
+        "administrator-owned content\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reset_rejects_symlinks_hard_links_and_wrong_permissions_without_touching_outside() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    let outside = target.parent().unwrap().join("outside");
+    fs::write(&outside, recognized_policy("900", "no")).unwrap();
+    std::os::unix::fs::symlink(&outside, &target).unwrap();
+
+    let symlink_result = run(&["reset"]);
+    assert!(!symlink_result.status.success());
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap(),
+        recognized_policy("900", "no")
+    );
+
+    fs::remove_file(&target).unwrap();
+    fs::write(&target, recognized_policy("901", "yes")).unwrap();
+    fs::hard_link(&target, target.parent().unwrap().join("hard-link")).unwrap();
+    let hard_link_result = run(&["reset"]);
+    assert!(!hard_link_result.status.success());
+    assert!(target.exists());
+
+    fs::remove_file(target.parent().unwrap().join("hard-link")).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    let permissions_result = run(&["reset"]);
+    assert!(!permissions_result.status.success());
+    assert!(target.exists());
+}
+
+#[test]
+fn reset_readback_faults_restore_the_complete_previous_policy() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    let previous = recognized_policy("900", "no");
+    fs::write(&target, &previous).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+
+    for fault in ["remove", "sync", "readback", "contradictory"] {
+        let result = run_fault(&["reset"], fault);
+        assert!(
+            !result.status.success(),
+            "fault {fault} unexpectedly succeeded"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), previous);
+        assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn reset_rejects_invalid_commands_without_mutating_a_policy() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    let previous = recognized_policy("900", "no");
+    fs::write(&target, &previous).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+
+    for arguments in [vec![], vec!["reset", "extra"], vec!["unknown"]] {
+        let result = run(&arguments);
+        assert!(!result.status.success());
+        assert_bounded_diagnostic(&result);
+        assert_eq!(fs::read_to_string(&target).unwrap(), previous);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reset_rejects_unexpected_types_wrong_ownership_and_parent_substitution() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    fs::create_dir(&target).unwrap();
+    assert!(!run(&["reset"]).status.success());
+    fs::remove_dir(&target).unwrap();
+
+    fs::write(&target, recognized_policy("900", "no")).unwrap();
+    if std::process::Command::new("chown")
+        .args(["65534:65534", target.to_str().unwrap()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+    {
+        assert!(!run(&["reset"]).status.success());
+        assert!(target.exists());
+    }
+    fs::remove_file(&target).unwrap();
+
+    let root = target
+        .parent()
+        .unwrap()
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .to_path_buf();
+    let policy_directory = target.parent().unwrap().to_path_buf();
+    let outside = root.join("outside-reset-policy");
+    fs::create_dir_all(&outside).unwrap();
+    fs::remove_dir(&policy_directory).unwrap();
+    std::os::unix::fs::symlink(&outside, &policy_directory).unwrap();
+    let result = run(&["reset"]);
+    assert!(!result.status.success());
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+}
+
+#[test]
+fn concurrent_apply_and_reset_leave_absent_or_one_complete_policy() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    let first = helper()
+        .args(["apply", "900", "no"])
+        .env_clear()
+        .spawn()
+        .unwrap();
+    let second = helper().args(["reset"]).env_clear().spawn().unwrap();
+    assert!(first.wait_with_output().unwrap().status.success());
+    assert!(second.wait_with_output().unwrap().status.success());
+
+    if target.exists() {
+        assert_eq!(
+            fs::read_to_string(target).unwrap(),
+            recognized_policy("900", "no")
+        );
+    }
 }
 
 #[test]
