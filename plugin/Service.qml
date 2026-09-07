@@ -28,6 +28,7 @@ Item {
   property int nextEventNumber: 1
   property int simulatedSleepSubmissionCount: 0
   property var lastSubmission: null
+  property var testClockMs: Quickshell.env("HBR_TEST_CLOCK_START_MS") ? Number(Quickshell.env("HBR_TEST_CLOCK_START_MS")) : null
   property var liveSleepCapabilities: null
   property bool sleepCapabilityProbeHealthy: false
   property var lastObservation: observeSleepExecutability()
@@ -383,6 +384,50 @@ Item {
     return JSON.stringify(Object.assign({ kind: kind, reasonCode: reasonCode }, details || {}))
   }
 
+  function setClockFixture(fixtureJson): string {
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    try {
+      var fixture = JSON.parse(String(fixtureJson))
+      if (!fixture || !Number.isSafeInteger(fixture.nowMs) || fixture.nowMs < 0) throw new Error("clock")
+      testClockMs = fixture.nowMs
+      return result("accepted", "HBR-TEST-CLOCK-SET", { nowMs: testClockMs })
+    } catch (error) { return result("refused", "HBR-TEST-CLOCK-MALFORMED", {}) }
+  }
+
+  function runAcceleratedSoak(transitions: int): string {
+    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    var count = Number(transitions)
+    if (!Number.isSafeInteger(count) || count < 1 || count > 5000) return result("refused", "HBR-TEST-SOAK-INVALID", {})
+    var accepted = 0
+    var refused = 0
+    var attemptIds = {}
+    var maxHistory = 0
+    var maxNotifications = 0
+    var maxDiagnosticsBytes = 0
+    var duplicateAttempt = false
+    for (var index = 0; index < count; index += 1) {
+      var receipt = JSON.parse(requestStagedSleep())
+      if (receipt.accepted) {
+        accepted += 1
+        if (attemptIds[receipt.attemptId]) duplicateAttempt = true
+        attemptIds[receipt.attemptId] = true
+      } else refused += 1
+      maxHistory = Math.max(maxHistory, (historyDocument.terminalOutcomes || []).length)
+      maxNotifications = Math.max(maxNotifications, (historyDocument.notifications || []).length)
+      maxDiagnosticsBytes = Math.max(maxDiagnosticsBytes, copyDiagnostics().length)
+      if (testClockMs !== null) testClockMs += 1
+    }
+    var finalStatus = JSON.parse(status())
+    return JSON.stringify({ schemaVersion: 1, envelopeVersion: 1, accepted: true,
+      reasonCode: "HBR-TEST-SOAK-COMPLETE", transitions: count, acceptedTransitions: accepted,
+      refusedTransitions: refused, duplicateAttempt: duplicateAttempt,
+      busyAtEnd: finalStatus.executionInProgress, historyCount: finalStatus.outcomeHistoryCount,
+      maxHistory: maxHistory, maxNotifications: maxNotifications,
+      maxDiagnosticsBytes: maxDiagnosticsBytes, finalRearmRequired: finalStatus.rearmRequired,
+      finalStatus: { automatic: finalStatus.automaticStagedSleepReadiness,
+        manual: finalStatus.manualStagedSleepReadiness } })
+  }
+
   function automaticPolicyChanged(previous, next): bool {
     return !!previous && !!next
       && (previous.automaticPolicyEnabled !== next.automaticPolicyEnabled
@@ -395,13 +440,14 @@ Item {
   }
 
   function clone(value): var { return JSON.parse(JSON.stringify(value)) }
-  function nowWallTime(): string { return new Date().toISOString() }
+  function clockNowMs(): int { return testClockMs === null ? Date.now() : testClockMs }
+  function nowWallTime(): string { return new Date(clockNowMs()).toISOString() }
 
   function eventEnvelope(attemptId, origin, selectedMode, phase, outcome, reasonCode, evidenceLevel, details): var {
     var eventId = "event-" + nextEventNumber++
     return {
       schemaVersion: 1, eventId: eventId, correlationId: attemptId || eventId, attemptId: attemptId,
-      wallTime: nowWallTime(), monotonicTimeMs: Date.now(), bootId: bootId,
+      wallTime: nowWallTime(), monotonicTimeMs: clockNowMs(), bootId: bootId,
       serviceGeneration: serviceGeneration, origin: origin, operation: "staged-sleep", phase: phase,
       outcome: outcome, reasonCode: reasonCode, requestedMode: "suspend-then-hibernate",
       selectedMode: selectedMode || "none", evidenceLevel: evidenceLevel, details: details || {}
@@ -479,7 +525,7 @@ Item {
   }
 
   function trimHistory(outcomes): var {
-    var cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000
+    var cutoff = clockNowMs() - 90 * 24 * 60 * 60 * 1000
     return outcomes.filter(function(entry) {
       var timestamp = Date.parse(entry.wallTime)
       return !isNaN(timestamp) && timestamp >= cutoff
@@ -1091,5 +1137,7 @@ Item {
     function setSystemPolicyFixture(fixtureJson: string): string { return root.setSystemPolicyFixture(fixtureJson) }
     function setActivityFixture(fixtureJson: string): string { return root.setActivityFixture(fixtureJson) }
     function setStayAwakeFixture(fixtureJson: string): string { return root.setStayAwakeFixture(fixtureJson) }
+    function setClockFixture(fixtureJson: string): string { return root.setClockFixture(fixtureJson) }
+    function runAcceleratedSoak(transitions: int): string { return root.runAcceleratedSoak(transitions) }
   }
 }

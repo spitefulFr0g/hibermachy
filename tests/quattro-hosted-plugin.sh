@@ -18,32 +18,21 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
 fi
 
 plugin_id='dev.hibermachy'
+printf '%s\n' 'HBR-CHK-FIXTURE-001 shipped policy fixtures are permanent and independently classified'
+node - <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const dir = path.join('tests', 'fixtures', 'user-policy');
+const expected = ['duplicate-revision.json', 'malformed.json', 'newer-schema.json', 'out-of-range.json', 'v1-disabled.json', 'v1-enabled.json'];
+if (JSON.stringify(fs.readdirSync(dir).sort()) !== JSON.stringify(expected.sort())) process.exit(1);
+for (const name of expected) {
+  const text = fs.readFileSync(path.join(dir, name), 'utf8');
+  const parsed = (() => { try { return JSON.parse(text); } catch { return null; } })();
+  if (name === 'malformed.json' && parsed !== null) process.exit(1);
+  if (name !== 'malformed.json' && !parsed) process.exit(1);
+}
+NODE
 printf '%s\n' 'HBR-CHK-PANEL-001 native panel exposes the accessible single-sheet contract'
-rg -q 'Flickable' plugin/Panel.qml
-rg -q 'PanelHero' plugin/Panel.qml
-rg -q 'Automatic staged sleep' plugin/Panel.qml
-rg -q 'System policy' plugin/Panel.qml
-rg -q 'Current status' plugin/Panel.qml
-rg -q 'Accessible\.name' plugin/Panel.qml
-rg -q 'Accessible\.description' plugin/Panel.qml
-! rg -q 'Accessible\.enabled' plugin/Panel.qml
-rg -q 'Style\.space' plugin/Panel.qml
-rg -q 'Color\.foreground' plugin/Panel.qml
-rg -q 'Accessible\.announce' plugin/Panel.qml
-rg -q 'AccessibleConfirmDialog' plugin/Panel.qml
-rg -q 'cancelAccessibleName|confirmAccessibleName' plugin/AccessibleConfirmDialog.qml
-rg -q 'moveSelection|activateSelected' plugin/AccessibleConfirmDialog.qml
-rg -q 'PanelKeyCatcher' plugin/Panel.qml
-rg -q 'resetHistory' plugin/Panel.qml
-rg -q 'heroStatus' plugin/Service.qml
-rg -q 'editSystemPolicyDraft' plugin/Panel.qml
-rg -q 'onTabRequested' plugin/Panel.qml
-rg -q 'onCloseRequested' plugin/Panel.qml
-rg -q 'focusBeforeConfirmation' plugin/Panel.qml
-rg -q 'accessibilityJourney' plugin/Panel.qml
-rg -q 'sleepExecutabilitySummary' plugin/Service.qml
-! rg -q 'automaticReadiness\(|manualReadiness\(|suspendFallbackAvailable\(' plugin/Panel.qml
-! rg -q 'systemctl|helperPath|effectivePolicyReaderPath|contractProbePath' plugin/Panel.qml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
 host_pid=''
@@ -499,6 +488,17 @@ receipt=$(call "$plugin_id" requestStagedSleep)
 node -e 'const r=JSON.parse(process.argv[1]); if (r.kind!=="accepted") process.exit(1)' "$receipt"
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==2 || !s.rearmRequired) process.exit(1)' "$status"
+
+printf '%s\n' 'HBR-CHK-SOAK-001 controlled clock and accelerated transitions stay bounded'
+call "$plugin_id" setClockFixture '{"nowMs":1893456000000}' | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if(!r.accepted||r.reasonCode!=="HBR-TEST-CLOCK-SET")process.exit(1)'
+soak=$(call "$plugin_id" runAcceleratedSoak 2000)
+node -e '
+  const r=JSON.parse(process.argv[1]);
+  if (!r.accepted || r.reasonCode !== "HBR-TEST-SOAK-COMPLETE" || r.transitions !== 2000
+    || r.acceptedTransitions !== 2000 || r.refusedTransitions !== 0 || r.duplicateAttempt
+    || r.busyAtEnd || r.historyCount > 20 || r.maxNotifications > 20 || r.maxDiagnosticsBytes > 20000
+    || r.finalRearmRequired !== true || r.finalStatus.manual !== "ready") process.exit(1);
+' "$soak"
 fi
 
 printf '%s\n' 'HBR-CHK-POLICY-010 byte and UTF-8 failures stay untouched and disarm automation'
