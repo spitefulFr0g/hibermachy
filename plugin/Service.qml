@@ -28,6 +28,8 @@ Item {
   readonly property string policyPath: policyDirectory + "/user-policy.json"
   property var policySnapshot: null
   property bool policyAccepted: false
+  property string policyReasonCode: "HBR-POLICY-LOADING"
+  property string lastObservedPolicyText: ""
   property var systemPolicyDraft: ({ hibernateDelaySeconds: 7200, hibernateOnAcPower: false, scope: "machine-wide" })
   property var requestedSystemPolicy: null
   property var effectiveSystemPolicy: null
@@ -50,11 +52,13 @@ Item {
     manualStagedSleepReadiness: manualReadiness(lastObservation),
     manualConfirmationKind: confirmationKind(lastObservation),
     manualConfirmationMessage: confirmationMessage(lastObservation),
-    reasonCode: contractReasonCode("automatic"),
+    reasonCode: contractReadiness("automatic") === "ready" ? policyReasonCode : contractReasonCode("automatic"),
     contractReadiness: contractReadiness("status"),
     contractReasonCode: contractReasonCode("status"),
     contractSnapshot: contractSnapshot,
     automaticReadinessReasonCode: contractReasonCode("automatic"),
+    automaticContractReadiness: contractReadiness("automatic"),
+    automaticExecutionState: rearmRequired ? "disarmed-rearm-latch" : "disarmed-awaiting-trigger",
     manualReadinessReasonCode: contractReasonCode("manual"),
     systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
     diagnosticsReadinessReasonCode: contractReasonCode("diagnostics"),
@@ -100,7 +104,8 @@ Item {
   function automaticReadiness(): string {
     if (contractReadiness("automatic") !== "ready") return "not-ready"
     if (!policyAccepted || !policySnapshot || !policySnapshot.automaticPolicyEnabled) return "not-ready"
-    return "not-ready"
+    if (!requestedSystemPolicy || !effectiveSystemPolicy || systemPolicyReasonCode !== "HBR-SYSTEM-POLICY-APPLIED") return "not-ready"
+    return "ready"
   }
 
   function loadContractProbe(output, exitCode) {
@@ -326,14 +331,45 @@ Item {
   }
 
   function loadUserPolicy(raw): void {
+    lastObservedPolicyText = String(raw || "")
+    if (String(raw).length > 16384) { policyAccepted = false; policyReasonCode = "HBR-POLICY-SIZE"; return }
+    if (String(raw).charCodeAt(0) === 0xFEFF || String(raw).indexOf("\uFFFD") >= 0) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
+    if ((String(raw).match(/"revision"\s*:/g) || []).length > 1) {
+      policyAccepted = false
+      policyReasonCode = "HBR-POLICY-DUPLICATE-KEY"
+      return
+    }
     try {
       var value = JSON.parse(String(raw || ""))
-      if (!value || value.version !== 1 || !Number.isSafeInteger(value.revision)
-        || typeof value.automaticPolicyEnabled !== "boolean") throw new Error("invalid policy")
+      if (!value || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 1
+        || typeof value.automaticPolicyEnabled !== "boolean" || !Number.isSafeInteger(value.idleDelaySeconds)
+        || value.idleDelaySeconds < 300 || value.idleDelaySeconds > 86400) throw new Error("invalid policy")
+      if (policySnapshot && value.revision !== policySnapshot.revision) {
+        policyAccepted = false
+        policyReasonCode = "HBR-POLICY-REVISION-CONFLICT"
+        return
+      }
+      if (policySnapshot && (value.automaticPolicyEnabled !== policySnapshot.automaticPolicyEnabled || value.idleDelaySeconds !== policySnapshot.idleDelaySeconds)) {
+        value.revision = value.revision === Number.MAX_SAFE_INTEGER ? value.revision : value.revision + 1
+      }
+      var canonical = JSON.stringify({ version: 1, revision: value.revision,
+        automaticPolicyEnabled: value.automaticPolicyEnabled, idleDelaySeconds: value.idleDelaySeconds }, null, 2) + "\n"
+      if (String(raw) !== canonical) policyFile.setText(canonical)
       policySnapshot = value
+      policyReasonCode = value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
     } catch (error) {
-      policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
-      policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
+      if (String(raw || "").trim() === "") {
+        policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
+        policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
+        policyAccepted = true
+        policyReasonCode = "HBR-POLICY-DISABLED"
+        return
+      }
+      policyAccepted = false
+      if ((String(raw).match(/"revision"\s*:/g) || []).length > 1) policyReasonCode = "HBR-POLICY-DUPLICATE-KEY"
+      else if (String(raw).indexOf('"version":2') >= 0) policyReasonCode = "HBR-POLICY-SCHEMA"
+      else policyReasonCode = String(raw).indexOf('"idleDelaySeconds"') < 0 ? "HBR-POLICY-KEYS" : "HBR-POLICY-MALFORMED"
+      return
     }
     policyAccepted = true
   }
@@ -344,17 +380,25 @@ Item {
     if (!policyAccepted || !policySnapshot) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-UNAVAILABLE" })
     var request
     try { request = JSON.parse(String(requestJson)) } catch (error) { return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-MUTATION-MALFORMED" }) }
-    if (request.baseRevision !== policySnapshot.revision || typeof request.automaticPolicyEnabled !== "boolean")
-      return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-STALE", policy: policySnapshot })
+    if (request.baseRevision !== policySnapshot.revision) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-STALE", policy: policySnapshot })
+    if (typeof request.automaticPolicyEnabled !== "boolean" || !Number.isSafeInteger(request.idleDelaySeconds)
+      || request.idleDelaySeconds < 300 || request.idleDelaySeconds > 86400)
+      return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-MUTATION-INVALID", policy: policySnapshot })
+    if (policySnapshot.revision === Number.MAX_SAFE_INTEGER)
+      return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-REVISION-EXHAUSTED", policy: policySnapshot })
     policySnapshot = { version: 1, revision: policySnapshot.revision + 1,
       automaticPolicyEnabled: request.automaticPolicyEnabled, idleDelaySeconds: request.idleDelaySeconds }
+    policyReasonCode = policySnapshot.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
     policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
     return JSON.stringify({ accepted: true, reasonCode: "HBR-POLICY-SAVED", policy: policySnapshot })
   }
 
   function resetUserPolicy(): string {
+    if (policySnapshot && policySnapshot.revision === Number.MAX_SAFE_INTEGER)
+      return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-REVISION-EXHAUSTED", policy: policySnapshot })
     policySnapshot = { version: 1, revision: (policySnapshot ? policySnapshot.revision + 1 : 1), automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
     policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
+    policyReasonCode = "HBR-POLICY-DISABLED"
     return JSON.stringify({ accepted: true, reasonCode: "HBR-POLICY-RESET", policy: policySnapshot })
   }
 
@@ -382,6 +426,7 @@ Item {
     if (!validSystemPolicy(systemPolicyDraft)) return policyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     var fixture = systemPolicyFixture || {}
+    if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
@@ -413,6 +458,7 @@ Item {
     if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     var fixture = systemPolicyFixture || {}
+    if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
     if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
@@ -532,9 +578,29 @@ Item {
     id: policyFile
     path: root.policyPath
     atomicWrites: true
+    watchChanges: true
     printErrors: false
     onLoaded: root.loadUserPolicy(text())
     onLoadFailed: root.loadUserPolicy("")
+  }
+
+  Timer {
+    interval: 100
+    repeat: true
+    running: true
+    onTriggered: {
+      if (!policyReader.running) policyReader.running = true
+    }
+  }
+
+  Process {
+    id: policyReader
+    command: ["cat", root.policyPath]
+    stdout: StdioCollector { id: policyReaderStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0 && policyReaderStdout.text !== root.lastObservedPolicyText)
+        root.loadUserPolicy(policyReaderStdout.text)
+    }
   }
 
   FileView {
