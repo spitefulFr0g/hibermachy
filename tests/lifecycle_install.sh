@@ -48,6 +48,23 @@ after=$(sha256sum "$fixture_root/menu.jsonc" | cut -d' ' -f1)
 [[ $before == "$after" ]]
 node -e 'const x=JSON.parse(process.argv[1]); if (x.menu!=="unchanged" || x.activation!=="disabled") process.exit(1)' "$rerun"
 
+rm "$fixture_root/helper-build"
+set +e; helper_failure=$("$command_path" setup --root "$fixture_root" 2>&1); helper_failure_code=$?; set -e
+[[ $helper_failure_code -ne 0 && $helper_failure == *'HBR-HELPER-BUILD-FAILED'* ]]
+node -e 'const x=JSON.parse(process.argv[1]); if (x.inventory.scopes.checkout.state!=="compatible" || x.inventory.scopes.menu_contribution.state!=="compatible") process.exit(1)' "$helper_failure"
+printf '%s\n' 'success=true user=unprivileged' > "$fixture_root/helper-build"
+
+printf '%s\n' 'protocol-min=9 protocol-max=9' > "$fixture_root/helper/protocol"
+protocol_status=$(lifecycle/status status --root "$fixture_root")
+jq -e '.scopes.helper_protocol.state == "mismatched"' <<<"$protocol_status" >/dev/null
+printf '%s\n' 'protocol-min=1 protocol-max=1' > "$fixture_root/helper/protocol"
+
+printf '%s\n' 'compatible=false' > "$fixture_root/probes"
+set +e; probe_failure=$("$command_path" setup --root "$fixture_root" 2>&1); probe_failure_code=$?; set -e
+[[ $probe_failure_code -ne 0 && $probe_failure == *'HBR-INTEGRATION-PROBES-INCOMPLETE'* ]]
+node -e 'const x=JSON.parse(process.argv[1]); if (x.inventory.scopes.helper_package.state!=="compatible") process.exit(1)' "$probe_failure"
+printf '%s\n' 'compatible=true' > "$fixture_root/probes"
+
 declined=$("$command_path" activate --root "$fixture_root" --decline)
 node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="declined" || x.activation!=="disabled") process.exit(1)' "$declined"
 later=$("$command_path" activate --root "$fixture_root" --confirm)
