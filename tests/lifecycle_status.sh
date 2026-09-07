@@ -33,7 +33,7 @@ printf '%s\n' '{"enabled":false}' > "$fixture_root/activation.json"
 printf '%s\n' '{"entries":[{"id":"setup.hibermachy","managedBy":"hibermachy","label":"Sleep & Hibernation","action":"open"},{"id":"system.hibermachy-staged-sleep","managedBy":"hibermachy","label":"Suspend then Hibernate","action":"requestStagedSleep"}]}' > "$fixture_root/menu.json"
 printf '%s\n' 'package=hibermachy-helper version=0.1.0' > "$fixture_root/helper/package"
 printf '%s\n' 'protocol-min=1 protocol-max=1' > "$fixture_root/helper/protocol"
-printf '%s\n' '{"version":1,"automaticPolicyEnablement":"disabled"}' > "$fixture_root/user/config.json"
+printf '%s\n' '{"schemaVersion":1,"revision":1,"automaticPolicyEnablement":false,"idleDelaySeconds":1800}' > "$fixture_root/user/config.json"
 printf '%s\n' '{"version":1}' > "$fixture_root/user/state.json"
 printf '%s\n' '# Managed by Hibermachy. Do not edit.
 [Sleep]
@@ -48,7 +48,7 @@ for scope in checkout activation menu_contribution helper_package helper_protoco
 done
 jq -e '.installationOwner.state == "identified" and .installationOwner.artifacts == "user-owned" and .scopes.requested_system_policy.ownership == "machine-wide" and .scopes.owned_target.ownership == "machine-wide"' <<<"$complete" >/dev/null
 jq -e '.scopes.activation.enabled == false' <<<"$complete" >/dev/null
-jq -e '.scopes.automatic_policy_enablement.state == "compatible" and .scopes.automatic_policy_enablement.automaticPolicyEnablement == "disabled"' <<<"$complete" >/dev/null
+jq -e '.scopes.automatic_policy_enablement.state == "compatible" and .scopes.automatic_policy_enablement.automaticPolicyEnablement == false' <<<"$complete" >/dev/null
 
 printf '%s\n' '{"enabled":true}' > "$fixture_root/activation.json"
 active=$("$command_path" status --root "$fixture_root")
@@ -96,6 +96,12 @@ rm -rf "$fixture_root/plugin"
 printf '%s\n' '{"entries":[{"id":"setup.hibermachy","managedBy":"hibermachy","label":"Changed by user","action":"open"}]}' > "$fixture_root/menu.json"
 modified=$("$command_path" status --root "$fixture_root")
 assert_scope "$modified" menu_contribution modified
+ln -s menu.json "$fixture_root/menu-link.json"
+rm "$fixture_root/menu.json"
+mv "$fixture_root/menu-link.json" "$fixture_root/menu.json"
+symlink_menu=$("$command_path" status --root "$fixture_root")
+assert_scope "$symlink_menu" menu_contribution inaccessible
+rm "$fixture_root/menu.json"
 rm "$fixture_root/user/state.json"
 incomplete=$("$command_path" status --root "$fixture_root")
 assert_scope "$incomplete" user_configuration_state incomplete

@@ -51,13 +51,15 @@ activation_state() {
 
 menu_state() {
   local file="$root/menu.json"
-  if [[ ! -e "$file" ]]; then
+  if [[ -L "$file" ]]; then
+    scope inaccessible user-owned 'Preserve a suspicious shared menu filesystem object for explicit resolution.'
+  elif [[ ! -e "$file" ]]; then
     missing_scope user-owned 'Reconcile the namespaced menu contribution only after validating shared menu state.'
   elif ! jq -e '.entries | type == "array"' "$file" >/dev/null 2>&1; then
     scope modified user-owned 'Preserve malformed shared menu state for explicit resolution.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy != "hibermachy")] | length > 0' "$file" >/dev/null; then
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | group_by(.id) | map(length > 1 or .[0].managedBy != "hibermachy") | any' "$file" >/dev/null; then
     scope colliding user-owned 'Preserve the colliding shared entry; do not overwrite it.'
-  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy" and ((.id == "setup.hibermachy" and .label == "Sleep & Hibernation" and .action == "open") or (.id == "system.hibermachy-staged-sleep" and .label == "Suspend then Hibernate" and .action == "requestStagedSleep")))] | length == 2' "$file" >/dev/null; then
+  elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | sort_by(.id) | (length == 2 and .[0].id == "setup.hibermachy" and .[0].managedBy == "hibermachy" and .[0].label == "Sleep & Hibernation" and .[0].action == "open" and .[1].id == "system.hibermachy-staged-sleep" and .[1].managedBy == "hibermachy" and .[1].label == "Suspend then Hibernate" and .[1].action == "requestStagedSleep")' "$file" >/dev/null; then
     scope compatible user-owned 'Managed entries are present; their actions still require a compatible live service.'
   elif jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' "$file" >/dev/null; then
     scope modified user-owned 'Preserve modified managed entries until their generated shape is explicitly resolved.'
@@ -98,8 +100,12 @@ protocol_state() {
     local helper_min helper_max
     helper_min=$(awk -F'[ =]' '{print $2}' "$file")
     helper_max=$(awk -F'[ =]' '{print $4}' "$file")
+    local helper_release checkout_release
+    helper_release=$(sed -n 's/^package=hibermachy-helper version=//p' "$root/helper/package" 2>/dev/null || true)
+    checkout_release=$(jq -r '.version // "unknown"' "$root/plugin/manifest.json" 2>/dev/null || printf '%s' unknown)
     jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
-      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:1, checkoutProtocolMax:1}' \
+      --arg helper_release "${helper_release:-unknown}" --arg checkout_release "$checkout_release" \
+      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:1, checkoutProtocolMax:1, helperReleaseVersion:$helper_release, checkoutReleaseVersion:$checkout_release}' \
       <<<"$(scope mismatched machine-wide 'Install a helper whose declared protocol range overlaps this checkout.')"
   fi
 }
@@ -110,12 +116,12 @@ automatic_policy_state() {
     scope inaccessible user-owned 'Preserve suspicious user policy for explicit resolution.'
   elif [[ ! -e "$file" ]]; then
     missing_scope user-owned 'Create user policy only through the user-owned configuration save.'
-  elif ! jq -e '(.automaticPolicyEnablement == "enabled" or .automaticPolicyEnablement == "disabled")' "$file" >/dev/null 2>&1; then
+  elif ! jq -e 'type == "object" and (keys_unsorted | sort == ["automaticPolicyEnablement", "idleDelaySeconds", "revision", "schemaVersion"]) and (.schemaVersion == 1) and (.revision | type == "number" and floor == . and . >= 1) and (.automaticPolicyEnablement | type == "boolean") and (.idleDelaySeconds | type == "number" and floor == . and . >= 300 and . <= 86400)' "$file" >/dev/null 2>&1; then
     scope incomplete user-owned 'Inspect the user policy document before treating automatic staged sleep as enabled or disabled.'
   else
     local enablement
-    enablement=$(jq -r .automaticPolicyEnablement "$file")
-    jq --arg enablement "$enablement" '. + {automaticPolicyEnablement:$enablement}' \
+    enablement=$(jq -c .automaticPolicyEnablement "$file")
+    jq --argjson enablement "$enablement" '. + {automaticPolicyEnablement:$enablement}' \
       <<<"$(scope compatible user-owned 'Automatic-policy enablement is distinct from plugin activation.')"
   fi
 }
