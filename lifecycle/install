@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+
+const [command, ...arguments_] = process.argv.slice(2);
+const rootIndex = arguments_.indexOf("--root");
+const root = rootIndex >= 0 ? arguments_[rootIndex + 1] : "";
+
+function fail(reasonCode, details = {}) {
+  process.stderr.write(JSON.stringify({ kind: "refused", reasonCode, ...details }) + "\n");
+  process.exitCode = 1;
+}
+function read(file) { return fs.readFileSync(path.join(root, file), "utf8"); }
+function exists(file) { try { return fs.existsSync(path.join(root, file)); } catch { return false; } }
+function regular(file) { try { return fs.lstatSync(path.join(root, file)).isFile(); } catch { return false; } }
+function fixtureOk(file, required = []) { return regular(file) && required.every((entry) => read(file).includes(entry)); }
+
+function withoutComments(source) {
+  let output = "", string = false, escaped = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const character = source[i], next = source[i + 1];
+    if (string) {
+      output += character;
+      if (escaped) escaped = false; else if (character === "\\") escaped = true; else if (character === '"') string = false;
+    } else if (character === '"') { string = true; output += character;
+    } else if (character === "/" && next === "/") { while (i < source.length && source[i] !== "\n") i += 1; output += "\n";
+    } else if (character === "/" && next === "*") { i += 2; while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i += 1; i += 1;
+    } else output += character;
+  }
+  return output;
+}
+
+function matchingArrayEnd(source, start) {
+  let depth = 0, string = false, escaped = false, lineComment = false, blockComment = false;
+  for (let i = start; i < source.length; i += 1) {
+    const character = source[i], next = source[i + 1];
+    if (lineComment) { if (character === "\n") lineComment = false; continue; }
+    if (blockComment) { if (character === "*" && next === "/") { blockComment = false; i += 1; } continue; }
+    if (string) { if (escaped) escaped = false; else if (character === "\\") escaped = true; else if (character === '"') string = false; continue; }
+    if (character === '"') { string = true; continue; }
+    if (character === "/" && next === "/") { lineComment = true; i += 1; continue; }
+    if (character === "/" && next === "*") { blockComment = true; i += 1; continue; }
+    if (character === "[") depth += 1;
+    if (character === "]" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+const menuEntries = [
+  { id: "setup.hibermachy", value: { managedBy: "hibermachy", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" } },
+  { id: "system.hibermachy-staged-sleep", value: { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "quickshell ipc call dev.hibermachy requestStagedSleep", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" } }
+];
+function sameEntry(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+
+function reconcileMenu() {
+  const menuPath = path.join(root, "menu.jsonc");
+  if (!regular("menu.jsonc")) throw new Error(exists("menu.jsonc") ? "HBR-MENU-INACCESSIBLE" : "HBR-MENU-MALFORMED");
+  const source = fs.readFileSync(menuPath, "utf8");
+  let document;
+  try { document = JSON.parse(withoutComments(source)); } catch { throw new Error("HBR-MENU-MALFORMED"); }
+  if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("HBR-MENU-MALFORMED");
+  const arrayMode = Array.isArray(document.entries);
+  if (!arrayMode && !Object.keys(document).length) throw new Error("HBR-MENU-MALFORMED");
+  const existing = arrayMode ? document.entries.map((entry) => ({ id: entry?.id, value: entry })) : Object.entries(document).map(([id, value]) => ({ id, value }));
+  for (const expected of menuEntries) {
+    const matches = existing.filter((entry) => entry.id === expected.id);
+    if (matches.length > 1 || (matches.length === 1 && matches[0].value?.managedBy !== "hibermachy")) throw new Error("HBR-MENU-ID-COLLISION");
+    const expectedValue = arrayMode ? { id: expected.id, ...expected.value } : expected.value;
+    if (matches.length === 1 && !sameEntry(matches[0].value, expectedValue)) throw new Error("HBR-MENU-MANAGED-MODIFIED");
+  }
+  if (menuEntries.every((entry) => existing.some((candidate) => candidate.id === entry.id && sameEntry(candidate.value, arrayMode ? { id: entry.id, ...entry.value } : entry.value)))) return "unchanged";
+  if (!arrayMode) {
+    const missing = menuEntries.filter((entry) => !Object.hasOwn(document, entry.id));
+    const key = /\n([ \t]*)\}\s*$/m.exec(source);
+    const close = key ? key.index + key[0].lastIndexOf("}") : -1;
+    if (close < 0) throw new Error("HBR-MENU-MALFORMED");
+    const indent = key[1] || "  ";
+    const text = (Object.keys(document).length ? ",\n" : "\n") + missing.map((entry) => `${indent}${JSON.stringify(entry.id)}: ${JSON.stringify(entry.value)}`).join(",\n") + "\n";
+    const temporary = `${menuPath}.hibermachy-${process.pid}.tmp`;
+    fs.writeFileSync(temporary, source.slice(0, close) + text + source.slice(close), { mode: fs.statSync(menuPath).mode & 0o777 });
+    fs.renameSync(temporary, menuPath);
+    return "reconciled";
+  }
+  const key = /(["']entries["']\s*:\s*)\[/m.exec(source);
+  if (!key) throw new Error("HBR-MENU-MALFORMED");
+  const open = key.index + key[0].lastIndexOf("[");
+  const close = matchingArrayEnd(source, open);
+  if (close < 0) throw new Error("HBR-MENU-MALFORMED");
+  const missing = menuEntries.filter((entry) => !document.entries.some((candidate) => candidate?.id === entry.id));
+  const prefix = document.entries.length ? ",\n" : "\n";
+  const indentMatch = source.slice(0, close).match(/\n([ \t]*)[^\n]*$/);
+  const indent = indentMatch ? indentMatch[1] : "  ";
+  const text = prefix + missing.map((entry) => `${indent}${JSON.stringify({ id: entry.id, ...entry.value })}`).join(",\n") + "\n";
+  const temporary = `${menuPath}.hibermachy-${process.pid}.tmp`;
+  fs.writeFileSync(temporary, source.slice(0, close) + text + source.slice(close), { mode: fs.statSync(menuPath).mode & 0o777 });
+  fs.renameSync(temporary, menuPath);
+  return "reconciled";
+}
+
+function manifest() {
+  try { const value = JSON.parse(read("plugin/manifest.json")); if (value.id !== "dev.hibermachy" || value.schemaVersion !== 1) throw new Error(); return value; }
+  catch { throw new Error("HBR-CHECKOUT-INCOMPATIBLE"); }
+}
+function setup() {
+  const plugin = manifest();
+  if (!fixtureOk("native-plugin-review", ["reviewed=true"])) throw new Error("HBR-LIFECYCLE-NATIVE-REVIEW-REQUIRED");
+  if (!fixtureOk("quattro-contract", ["compatible=true"])) throw new Error("HBR-QUATTRO-CONTRACT-INCOMPATIBLE");
+  if (!fixtureOk("helper-build", ["success=true", "user=unprivileged"])) throw new Error("HBR-HELPER-BUILD-FAILED");
+  if (!fixtureOk("package-install", ["success=true", "authorization=interactive"])) throw new Error("HBR-PACKAGE-INSTALL-FAILED");
+  fs.mkdirSync(path.join(root, "helper"), { recursive: true });
+  fs.writeFileSync(path.join(root, "helper/package"), "package=hibermachy-helper version=0.1.0\n");
+  fs.writeFileSync(path.join(root, "helper/package.owner"), "owner=pacman\n");
+  fs.writeFileSync(path.join(root, "helper/protocol"), `protocol-min=${plugin.protocol.min} protocol-max=${plugin.protocol.max}\n`);
+  const menu = reconcileMenu();
+  if (!fixtureOk("probes", ["compatible=true"])) throw new Error("HBR-INTEGRATION-PROBES-INCOMPLETE");
+  if (!exists("activation.json")) fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":false}\n');
+  const activation = JSON.parse(read("activation.json")).enabled ? "enabled" : "disabled";
+  return {
+    kind: "accepted", operation: "setup", installationOwnerModel: "one Omarchy desktop user per machine",
+    activation, menu, policyMutation: false,
+    scopes: { checkout: "compatible", activation, menu: menu === "unchanged" ? "compatible" : "reconciled", helper: "compatible", protocol: "compatible", userData: "retained", requestedSystemPolicy: "untouched" }
+  };
+}
+function activate(confirm) {
+  manifest();
+  if (!confirm) return { kind: "declined", operation: "activation", activation: "disabled", policyMutation: false };
+  fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":true}\n');
+  return { kind: "accepted", operation: "activation", activation: "enabled", policyMutation: false };
+}
+
+if (!root || !fs.existsSync(root)) fail("HBR-LIFECYCLE-ROOT-REQUIRED");
+else if (command !== "setup" && command !== "activate") fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
+else { try { process.stdout.write(JSON.stringify(command === "setup" ? setup() : activate(arguments_.includes("--confirm"))) + "\n"); } catch (error) { fail(error instanceof Error ? error.message : "HBR-LIFECYCLE-FAILED"); } }
