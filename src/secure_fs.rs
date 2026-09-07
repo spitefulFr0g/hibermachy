@@ -270,20 +270,26 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
         if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
             return Err("remove failed");
         }
+        // No fallible operation follows cleanup; a best-effort sync cannot turn a
+        // completed removal into a reported failure after the backup is gone.
+        let _ = synchronize(&directory);
         Ok(())
     })();
     if result.is_err() && moved {
         // SAFETY: restore the complete recognized policy to its original fixed name.
-        unsafe {
+        let restored = unsafe {
             renameat2(
                 directory.as_raw_fd(),
                 temporary.as_ptr(),
                 directory.as_raw_fd(),
                 target.as_ptr(),
-                0,
+                RENAME_NOREPLACE,
             )
-        };
-        let _ = synchronize(&directory);
+        } == 0
+            && synchronize(&directory).is_ok();
+        if !restored {
+            return Err("rollback failed");
+        }
     }
     result
 }
