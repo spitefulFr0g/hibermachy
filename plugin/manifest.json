@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.hibermachy",
+  "name": "Hibermachy",
+  "version": "0.1.0",
+  "author": "Hibermachy contributors",
+  "license": "MIT",
+  "description": "Disabled-first automatic staged sleep policy and status.",
+  "kinds": ["service", "panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "panel": "Panel.qml"
+  }
+}

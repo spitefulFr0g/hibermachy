@@ -1,0 +1,9 @@
+{
+  "name": "hibermachy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:quattro-hosted",
+    "test:quattro-hosted": "tests/quattro-hosted-plugin.sh"
+  }
+}
