@@ -101,7 +101,7 @@ fn validate_regular_file(metadata: &Metadata) -> Result<(), &'static str> {
     if !metadata.is_file()
         || metadata.uid() != expected_owner()
         || metadata.nlink() != 1
-        || metadata.mode() & 0o077 != 0
+        || metadata.mode() & 0o777 != 0o600
     {
         return Err("unsafe filesystem state");
     }
@@ -315,7 +315,9 @@ fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suff
     };
     if file.write_all(bytes).is_err() || synchronize(&file).is_err() {
         // SAFETY: only this invocation's exclusive temporary name is removed.
-        unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
+            return false;
+        }
         return false;
     }
     drop(file);
@@ -331,7 +333,9 @@ fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suff
     } != 0
     {
         // SAFETY: only this invocation's exclusive temporary name is removed.
-        unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) };
+        if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
+            return false;
+        }
         return false;
     }
     synchronize(directory).is_ok()
