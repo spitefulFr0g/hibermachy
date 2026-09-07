@@ -29,6 +29,8 @@ rg -q 'Accessible\.liveRegion' plugin/Panel.qml
 rg -q 'ConfirmDialog' plugin/Panel.qml
 rg -q 'PanelKeyCatcher' plugin/Panel.qml
 rg -q 'resetHistory' plugin/Panel.qml
+rg -q 'heroStatus' plugin/Service.qml
+! rg -q 'automaticReadiness\(|manualReadiness\(|suspendFallbackAvailable\(' plugin/Panel.qml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
 host_pid=''

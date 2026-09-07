@@ -83,9 +83,10 @@ Item {
     diagnosticsReadinessReasonCode: diagnosticsReasonCode(),
     diagnosticsReadiness: diagnosticsReadiness(),
     sleepExecutability: clone(lastObservation),
-    fallbackAvailable: !!lastObservation && !lastObservation.observationFailed
-      && !lastObservation.stagedSleepExecutable && !!lastObservation.suspendExecutable,
+    fallbackAvailable: suspendFallbackAvailable(),
     activeBlocker: activeBlocker(),
+    heroStatus: heroStatus(),
+    heroExplanation: heroExplanation(),
     readiness: ({ automatic: automaticReadiness(), manual: manualReadiness(lastObservation),
       systemPolicy: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready",
       diagnostics: diagnosticsReadiness() }),
@@ -140,14 +141,46 @@ Item {
     return historyHealthy ? "HBR-DIAGNOSTICS-READY" : "HBR-DIAGNOSTICS-DEGRADED"
   }
 
+  function suspendFallbackAvailable(): bool {
+    return !!lastObservation && !lastObservation.observationFailed
+      && !lastObservation.stagedSleepExecutable && !!lastObservation.suspendExecutable
+  }
+
   function activeBlocker(): string {
     if (!contractProbeComplete) return "HBR-CONTRACT-PREFLIGHT-PENDING"
+    if (!policySnapshot || !policySnapshot.automaticPolicyEnabled) return "none"
     if (!policyAccepted) return policyReasonCode
     if (automaticReadiness() !== "ready") return automaticReadinessReason()
     if (manualReadiness(lastObservation) !== "ready") return manualReadinessReason()
     if (systemPolicyReasonCode !== "HBR-SYSTEM-POLICY-APPLIED") return systemPolicyReasonCode
     if (diagnosticsReadiness() === "degraded") return "HBR-DIAGNOSTICS-DEGRADED"
     return "HBR-READY"
+  }
+
+  function latestOutcome(): var {
+    var outcomes = historyDocument.terminalOutcomes || []
+    return outcomes.length ? outcomes[outcomes.length - 1] : null
+  }
+
+  function heroStatus(): string {
+    if (executionInProgress) return "Active sleep transaction"
+    var outcome = latestOutcome()
+    if (outcome && (outcome.outcome === "Failed" || outcome.outcome === "Indeterminate"))
+      return outcome.outcome === "Failed" ? "Action failed" : "Outcome indeterminate"
+    if (manualReadiness(lastObservation) !== "ready"
+      && (lastObservation.observationFailed || (!lastObservation.stagedSleepExecutable && !lastObservation.suspendExecutable)
+        || lastObservation.systemSleepInhibited)) return "Unavailable now"
+    if (systemPolicyReasonCode === "HBR-SYSTEM-POLICY-DIFFERS") return "Policy differs"
+    if (suspendFallbackAvailable()) return "Suspend fallback"
+    if (!policySnapshot || !policySnapshot.automaticPolicyEnabled) return "Automation paused"
+    if (rearmRequired || !freshActivityObserved) return "Awaiting fresh activity"
+    if (automaticReadiness() === "ready" || manualReadiness(lastObservation) === "ready"
+      || systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED") return "Ready"
+    return "Unavailable now"
+  }
+
+  function heroExplanation(): string {
+    return heroStatus() + ". " + statusAnnouncement()
   }
 
   function automaticReadinessReason(): string {

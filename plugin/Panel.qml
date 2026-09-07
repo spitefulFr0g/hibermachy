@@ -158,7 +158,7 @@ Panel {
 
         PanelHero {
           width: parent.width
-          title: "Hibermachy"
+          title: "Sleep & Hibernation"
           meta: root.heroStatus
           detail: root.statusSnapshot ? root.statusSnapshot.pluginActivation : "unavailable"
           Accessible.name: "Hibermachy operational readiness"
@@ -370,21 +370,17 @@ Panel {
   }
 
   readonly property string heroStatus: {
-    if (!statusSnapshot) return "Status unavailable"
-    if (statusSnapshot.automaticStagedSleepReadiness === "ready") return "Automatic ready"
-    if (statusSnapshot.manualStagedSleepReadiness === "ready") return "Manual ready"
-    if (statusSnapshot.systemPolicyReadiness === "ready") return "System policy ready"
-    if (statusSnapshot.diagnosticsReadiness === "degraded") return "Diagnostics degraded"
-    return "Action required"
+    return statusSnapshot ? statusSnapshot.heroStatus : "Status unavailable"
   }
-  readonly property string heroExplanation: statusSnapshot ? "Automatic: " + statusSnapshot.automaticStagedSleepReadiness
-    + " · Manual: " + statusSnapshot.manualStagedSleepReadiness + " · System policy: " + statusSnapshot.systemPolicyReadiness
-    + " · Diagnostics: " + statusSnapshot.diagnosticsReadiness : "No readiness snapshot is available."
+  readonly property string heroExplanation: statusSnapshot ? statusSnapshot.heroExplanation
+    + " Automatic: " + statusSnapshot.automaticStagedSleepReadiness + " · Manual: " + statusSnapshot.manualStagedSleepReadiness
+    + " · System policy: " + statusSnapshot.systemPolicyReadiness + " · Diagnostics: " + statusSnapshot.diagnosticsReadiness
+    : "No readiness snapshot is available."
   readonly property string statusSummary: statusSnapshot ? "Automatic staged sleep: " + statusSnapshot.automaticStagedSleepReadiness
     + " (" + statusSnapshot.automaticBlockerReasonCode + ")\nManual staged sleep: " + statusSnapshot.manualStagedSleepReadiness
     + " — " + (statusSnapshot.sleepExecutability.stagedSleepExecutable ? "staged sleep executable" : (statusSnapshot.fallbackAvailable ? "suspend fallback available" : "no suspend fallback"))
     + "\nStay Awake: " + statusSnapshot.stayAwake + "; re-arm: " + (statusSnapshot.rearmRequired ? "required" : "armed")
-    + "\nActive blocker: " + statusSnapshot.activeBlocker : "Status unavailable."
+    + "\nActive blocker: " + (statusSnapshot.activeBlocker === "none" ? "none (automation paused)" : statusSnapshot.activeBlocker) : "Status unavailable."
   readonly property string manualActionText: statusSnapshot && statusSnapshot.manualConfirmationKind === "suspend-fallback"
     ? "Confirm manual Suspend fallback" : "Confirm Suspend then Hibernate"
 
