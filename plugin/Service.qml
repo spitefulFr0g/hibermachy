@@ -7,7 +7,6 @@ Item {
 
   readonly property string stateDirectory: String(Quickshell.env("HIBERMACHY_STATE_DIR") || Quickshell.env("HOME") + "/.local/state/hibermachy")
   readonly property string historyPath: stateDirectory + "/outcomes.json"
-  readonly property string openAttemptPath: stateDirectory + "/open-attempt.json"
   readonly property string latchPath: stateDirectory + "/rearm-latch.json"
   readonly property string bootId: String(Quickshell.env("HIBERMACHY_SIM_BOOT_ID") || "simulated-boot")
   readonly property string serviceGeneration: "service-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)
@@ -113,7 +112,6 @@ Item {
     if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) {
       historyHealthy = false
       historyLoaded = true
-      openAttemptFile.reload()
       return
     }
     if (String(raw || "").trim() !== "") {
@@ -128,7 +126,6 @@ Item {
       }
     }
     historyLoaded = true
-    openAttemptFile.reload()
     reconcileRecoveredAttempt()
     recordSimulatedSuppression()
     nextAttemptNumber = Math.max(nextAttemptNumber, historyDocument.terminalOutcomes.length + 1)
@@ -142,27 +139,15 @@ Item {
     } catch (error) { rearmRequired = true }
   }
 
-  function persistHistory(): bool {
-    if (!historyHealthy || simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) {
+  function persistHistory(allowOpenAttemptDuringDiagnosticFault): bool {
+    if (allowOpenAttemptDuringDiagnosticFault && simulatedBoolean("HIBERMACHY_SIM_OPEN_ATTEMPT_FAILURE", false)) return false
+    if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) historyHealthy = false
+    if (!historyHealthy && !allowOpenAttemptDuringDiagnosticFault) {
       historyHealthy = false
       return false
     }
     historyFile.setText(JSON.stringify(historyDocument, null, 2) + "\n")
     return true
-  }
-
-  function persistOpenAttempt(attempt): void {
-    openAttemptFile.setText(JSON.stringify({ schemaVersion: 1, openAttempt: attempt }, null, 2) + "\n")
-  }
-
-  function loadOpenAttempt(raw): void {
-    if (!raw || String(raw).trim() === "") return
-    try {
-      var parsed = JSON.parse(raw)
-      if (parsed.schemaVersion !== 1 || !parsed.openAttempt) return
-      if (!historyDocument.openAttempt) historyDocument.openAttempt = parsed.openAttempt
-      if (historyLoaded && historyDocument.openAttempt) reconcileRecoveredAttempt()
-    } catch (error) { historyHealthy = false }
   }
 
   function persistLatch(): bool {
@@ -193,7 +178,6 @@ Item {
     next.notificationFingerprints = next.notificationFingerprints.slice(-64)
     historyDocument = next
     persistHistory()
-    persistOpenAttempt(null)
   }
 
   function reconcileRecoveredAttempt(): void {
@@ -272,8 +256,10 @@ Item {
     var next = clone(historyDocument)
     next.openAttempt = openAttempt
     historyDocument = next
-    persistOpenAttempt(openAttempt)
-    persistHistory()
+    if (!persistHistory(true)) {
+      executionInProgress = false
+      return result("failed", "HBR-HISTORY-ATTEMPT-PERSISTENCE-FAILED", {})
+    }
 
     lastSubmission = { attemptId: attemptId, origin: origin, requestedMode: "suspend-then-hibernate",
       selectedMode: selectedMode, selectionPath: selectionPath, simulated: true,
@@ -310,14 +296,6 @@ Item {
     onLoadFailed: root.loadHistory("")
   }
 
-  FileView {
-    id: openAttemptFile
-    path: root.openAttemptPath
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.loadOpenAttempt(text())
-    onLoadFailed: root.loadOpenAttempt("")
-  }
 
   FileView {
     id: latchFile

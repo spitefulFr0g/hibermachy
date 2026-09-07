@@ -12,6 +12,7 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused HIBERMACHY_EXPECTED_REASON=HBR-SLEEP-SYSTEM-INHIBITED "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed HIBERMACHY_EXPECTED_REASON=HBR-SLEEP-OBSERVATION-FAILED "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_LATCH_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed HIBERMACHY_EXPECTED_REASON=HBR-HISTORY-REARM-PERSISTENCE-FAILED "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OPEN_ATTEMPT_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed HIBERMACHY_EXPECTED_REASON=HBR-HISTORY-ATTEMPT-PERSISTENCE-FAILED "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_HISTORY_FAILURE=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate HIBERMACHY_EXPECTED_OUTCOME=Completed HIBERMACHY_EXPECT_HISTORY_HEALTH=degraded "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE HIBERMACHY_EXPECT_SUPPRESSED=1 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_OPEN_BOOT=prior-boot HIBERMACHY_EXPECT_BOOT_CHANGE=1 "$0"
@@ -206,7 +207,7 @@ node -e '
   const expectedBusy = process.argv[4] === "1";
   const forbidden = ["stagedSleepExecutable", "hibernateExecutable", "suspendExecutable", "systemSleepInhibited"];
   if (forbidden.some((field) => Object.hasOwn(status, field))) process.exit(1);
-  const expectedConfirmation = expectedBusy ? "unavailable" : (process.env.HIBERMACHY_SIM_LATCH_FAILURE === "1") ? "staged-sleep" : expectedKind === "accepted"
+  const expectedConfirmation = expectedBusy ? "unavailable" : ((process.env.HIBERMACHY_SIM_LATCH_FAILURE === "1" || process.env.HIBERMACHY_SIM_OPEN_ATTEMPT_FAILURE === "1") ? "staged-sleep" : expectedKind === "accepted")
     ? (expectedMode === "suspend" ? "suspend-fallback" : "staged-sleep")
     : "unavailable";
   if (status.manualConfirmationKind !== expectedConfirmation) process.exit(1);
