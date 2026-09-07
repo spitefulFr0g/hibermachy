@@ -77,8 +77,19 @@ Item {
     stayAwake: stayAwakeKnown ? (stayAwakeEnabled ? "on" : "off") : "unknown",
     freshActivityObserved: freshActivityObserved,
     manualReadinessReasonCode: contractReasonCode("manual"),
+    manualBlockerReasonCode: manualReadinessReason(),
     systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
-    diagnosticsReadinessReasonCode: contractReasonCode("diagnostics"),
+    automaticBlockerReasonCode: automaticReadinessReason(),
+    diagnosticsReadinessReasonCode: diagnosticsReasonCode(),
+    diagnosticsReadiness: diagnosticsReadiness(),
+    sleepExecutability: clone(lastObservation),
+    fallbackAvailable: !!lastObservation && !lastObservation.observationFailed
+      && !lastObservation.stagedSleepExecutable && !!lastObservation.suspendExecutable,
+    activeBlocker: activeBlocker(),
+    readiness: ({ automatic: automaticReadiness(), manual: manualReadiness(lastObservation),
+      systemPolicy: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready",
+      diagnostics: diagnosticsReadiness() }),
+    statusAnnouncement: statusAnnouncement(),
     executionInProgress: executionInProgress,
     rearmRequired: rearmRequired,
     historyLoaded: historyLoaded,
@@ -116,6 +127,55 @@ Item {
 
   function contractReadiness(operation): string {
     return contractReasonCode(operation) === "HBR-CONTRACT-READY" ? "ready" : "not-ready"
+  }
+
+  function diagnosticsReadiness(): string {
+    if (!contractProbeComplete) return "not-ready"
+    return historyLoaded && historyHealthy ? "ready" : (historyLoaded ? "degraded" : "not-ready")
+  }
+
+  function diagnosticsReasonCode(): string {
+    if (contractReadiness("diagnostics") !== "ready") return contractReasonCode("diagnostics")
+    if (!historyLoaded) return "HBR-DIAGNOSTICS-HISTORY-PENDING"
+    return historyHealthy ? "HBR-DIAGNOSTICS-READY" : "HBR-DIAGNOSTICS-DEGRADED"
+  }
+
+  function activeBlocker(): string {
+    if (!contractProbeComplete) return "HBR-CONTRACT-PREFLIGHT-PENDING"
+    if (!policyAccepted) return policyReasonCode
+    if (automaticReadiness() !== "ready") return automaticReadinessReason()
+    if (manualReadiness(lastObservation) !== "ready") return manualReadinessReason()
+    if (systemPolicyReasonCode !== "HBR-SYSTEM-POLICY-APPLIED") return systemPolicyReasonCode
+    if (diagnosticsReadiness() === "degraded") return "HBR-DIAGNOSTICS-DEGRADED"
+    return "HBR-READY"
+  }
+
+  function automaticReadinessReason(): string {
+    if (contractReadiness("automatic") !== "ready") return contractReasonCode("automatic")
+    if (!policySnapshot || !policySnapshot.automaticPolicyEnabled) return "HBR-AUTOMATIC-DISABLED"
+    if (!requestedSystemPolicy || !effectiveSystemPolicy) return "HBR-SYSTEM-POLICY-NOT-READY"
+    if (!idleMonitorHealthy) return "HBR-IDLE-MONITOR-UNAVAILABLE"
+    if (compositorIdleInhibited) return "HBR-COMPOSITOR-IDLE-INHIBITED"
+    if (stayAwakeKnown && stayAwakeEnabled) return "HBR-STAY-AWAKE-ENABLED"
+    if (rearmRequired || !freshActivityObserved) return "HBR-FRESH-ACTIVITY-REQUIRED"
+    return "HBR-AUTOMATIC-READY"
+  }
+
+  function manualReadinessReason(): string {
+    if (executionInProgress) return "HBR-SLEEP-BUSY"
+    if (contractReadiness("manual") !== "ready") return contractReasonCode("manual")
+    if (lastObservation.observationFailed) return "HBR-SLEEP-OBSERVATION-FAILED"
+    if (lastObservation.systemSleepInhibited) return "HBR-SLEEP-SYSTEM-INHIBITED"
+    if (!lastObservation.stagedSleepExecutable && !lastObservation.suspendExecutable) return "HBR-SLEEP-NOT-EXECUTABLE"
+    return "HBR-MANUAL-READY"
+  }
+
+  function statusAnnouncement(): string {
+    var automatic = automaticReadiness()
+    var manual = manualReadiness(lastObservation)
+    return "Automatic staged sleep " + automatic + "; manual staged sleep " + manual
+      + "; system policy " + (systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not ready")
+      + "; diagnostics " + diagnosticsReadiness() + "."
   }
 
   function automaticReadiness(): string {
@@ -540,6 +600,21 @@ Item {
     return JSON.stringify({ accepted: true, reasonCode: "HBR-POLICY-RESET", policy: policySnapshot })
   }
 
+  function resetHistory(): string {
+    if (executionInProgress || historyDocument.openAttempt) {
+      return JSON.stringify({ accepted: false, reasonCode: "HBR-HISTORY-ACTIVE-ATTEMPT" })
+    }
+    historyDocument = emptyHistory()
+    rearmRequired = true
+    freshActivityObserved = false
+    historyHealthy = true
+    historyLoaded = true
+    nextAttemptNumber = 1
+    nextEventNumber = 1
+    if (!persistHistory(false)) return JSON.stringify({ accepted: false, reasonCode: "HBR-HISTORY-PERSISTENCE" })
+    return JSON.stringify({ accepted: true, reasonCode: "HBR-HISTORY-RESET" })
+  }
+
   function editSystemPolicyDraft(delaySeconds, onAcPower): string {
     var next = { hibernateDelaySeconds: delaySeconds, hibernateOnAcPower: onAcPower, scope: "machine-wide" }
     if (!validSystemPolicy(next)) return policyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
@@ -961,6 +1036,7 @@ Item {
     function userPolicy(): string { return root.userPolicy() }
     function saveUserPolicy(requestJson: string): string { return root.saveUserPolicy(requestJson) }
     function resetUserPolicy(): string { return root.resetUserPolicy() }
+    function resetHistory(): string { return root.resetHistory() }
     function requestStagedSleep(): string { return root.requestStagedSleep() }
     function editSystemPolicyDraft(delaySeconds: int, onAcPower: bool): string { return root.editSystemPolicyDraft(delaySeconds, onAcPower) }
     function reviewSystemPolicy(): string { return root.reviewSystemPolicy() }

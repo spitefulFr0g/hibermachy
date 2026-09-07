@@ -17,6 +17,18 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
 fi
 
 plugin_id='dev.hibermachy'
+printf '%s\n' 'HBR-CHK-PANEL-001 native panel exposes the accessible single-sheet contract'
+rg -q 'Flickable' plugin/Panel.qml
+rg -q 'PanelHero' plugin/Panel.qml
+rg -q 'Automatic staged sleep' plugin/Panel.qml
+rg -q 'System policy' plugin/Panel.qml
+rg -q 'Current status' plugin/Panel.qml
+rg -q 'Accessible\.name' plugin/Panel.qml
+rg -q 'Accessible\.enabled' plugin/Panel.qml
+rg -q 'Accessible\.liveRegion' plugin/Panel.qml
+rg -q 'ConfirmDialog' plugin/Panel.qml
+rg -q 'PanelKeyCatcher' plugin/Panel.qml
+rg -q 'resetHistory' plugin/Panel.qml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
 host_pid=''
@@ -199,6 +211,14 @@ call shell setPluginEnabled "$plugin_id" true | grep -qx 'ok'
 status=$(status_json)
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
+printf '%s\n' 'HBR-CHK-READINESS-001 readiness operations remain independent and live state is exposed'
+node -e '
+  const s = JSON.parse(process.argv[1]);
+  const keys = ["automaticStagedSleepReadiness", "manualStagedSleepReadiness", "systemPolicyReadiness", "diagnosticsReadiness", "sleepExecutability", "activeBlocker"];
+  if (keys.some((key) => !(key in s))) process.exit(1);
+  if (!s.sleepExecutability || typeof s.sleepExecutability.observationFailed !== "boolean") process.exit(1);
+  if (s.automaticStagedSleepReadiness !== "not-ready" || s.manualStagedSleepReadiness !== "ready") process.exit(1);
+' "$status"
 printf '%s\n' 'HBR-CHK-SYSTEM-001 system policy starts as an independent unpersisted draft'
 assert_system_policy_draft "$status"
 
@@ -483,6 +503,12 @@ assert_receipt "$receipt" false HBR-POLICY-REVISION-EXHAUSTED
 node -e 'const r=JSON.parse(process.argv[1]); if (r.policy.revision!==Number.MAX_SAFE_INTEGER) process.exit(1)' "$receipt"
 receipt=$(call "$plugin_id" resetUserPolicy)
 assert_receipt "$receipt" false HBR-POLICY-REVISION-EXHAUSTED
+
+printf '%s\n' 'HBR-CHK-DIAGNOSTICS-001 history reset is explicit, bounded, and does not mutate live policy'
+receipt=$(call "$plugin_id" resetHistory)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-HISTORY-RESET") process.exit(1)' "$receipt"
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.outcomeHistoryCount!==0 || s.automaticPolicyEnablement!=="disabled" || !s.rearmRequired) process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-PLUGIN-003 summon and hide'
 call shell summon "$plugin_id" '{}' >/dev/null
