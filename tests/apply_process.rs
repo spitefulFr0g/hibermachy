@@ -238,6 +238,35 @@ fn reset_rejects_unexpected_types_wrong_ownership_and_parent_substitution() {
 }
 
 #[test]
+fn reset_refuses_a_preexisting_invocation_temporary_without_changing_either_object() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    let temporary = target.parent().unwrap().join(format!(
+        ".{}.{}.reset.tmp",
+        target.file_name().unwrap().to_string_lossy(),
+        "collision"
+    ));
+    let previous = recognized_policy("900", "no");
+    fs::write(&target, &previous).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&temporary, "administrator temporary\n").unwrap();
+
+    let result = helper()
+        .args(["reset"])
+        .env_clear()
+        .env("HIBERMACHY_TEST_RESET_TEMP", "collision")
+        .output()
+        .unwrap();
+
+    assert!(!result.status.success());
+    assert_eq!(fs::read_to_string(&target).unwrap(), previous);
+    assert_eq!(
+        fs::read_to_string(temporary).unwrap(),
+        "administrator temporary\n"
+    );
+}
+
+#[test]
 fn concurrent_apply_and_reset_leave_absent_or_one_complete_policy() {
     let _guard = test_lock();
     let target = prepare_policy_directory();

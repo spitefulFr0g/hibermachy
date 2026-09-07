@@ -176,15 +176,24 @@ fn recognized_existing_target(
         0,
     ) {
         Ok(existing) => existing,
-        Err(_) => match call_openat(directory, target, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0) {
-            Ok(existing) => {
-                validate_regular_file(
-                    &existing.metadata().map_err(|_| "unsafe filesystem state")?,
-                )?;
-                return Err("unsafe existing target");
+        Err(_) => {
+            let first_error = std::io::Error::last_os_error().raw_os_error();
+            match call_openat(directory, target, O_PATH | O_NOFOLLOW | O_CLOEXEC, 0) {
+                Ok(existing) => {
+                    validate_regular_file(
+                        &existing.metadata().map_err(|_| "unsafe filesystem state")?,
+                    )?;
+                    return Err("unsafe existing target");
+                }
+                Err(_)
+                    if first_error == Some(2)
+                        && std::io::Error::last_os_error().raw_os_error() == Some(2) =>
+                {
+                    return Ok(None);
+                }
+                Err(_) => return Err("unsafe existing target"),
             }
-            Err(_) => return Ok(None),
-        },
+        }
     };
     validate_regular_file(&existing.metadata().map_err(|_| "unsafe filesystem state")?)?;
     let mut bytes = Vec::new();
@@ -226,7 +235,12 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
     if recognized_existing_target(&directory, &target)?.is_none() {
         return Ok(());
     }
-    let temporary = c_name(&format!(".{target_name}.{}.reset.tmp", std::process::id()))?;
+    #[cfg(feature = "test-support")]
+    let temporary_suffix = std::env::var("HIBERMACHY_TEST_RESET_TEMP")
+        .unwrap_or_else(|_| std::process::id().to_string());
+    #[cfg(not(feature = "test-support"))]
+    let temporary_suffix = std::process::id().to_string();
+    let temporary = c_name(&format!(".{target_name}.{temporary_suffix}.reset.tmp"))?;
     let mut moved = false;
     let result = (|| {
         // SAFETY: both names are fixed invocation-local names within the validated directory.
@@ -236,7 +250,7 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
                 target.as_ptr(),
                 directory.as_raw_fd(),
                 temporary.as_ptr(),
-                0,
+                RENAME_NOREPLACE,
             )
         } != 0
         {
@@ -251,11 +265,11 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
         }
         inject_reset_fault("readback")?;
         inject_reset_fault("contradictory")?;
+        // The directory state was synchronized and absence was read back before cleanup.
         // SAFETY: only the temporary object created by this invocation is removed.
         if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
             return Err("remove failed");
         }
-        synchronize(&directory)?;
         Ok(())
     })();
     if result.is_err() && moved {
