@@ -6,6 +6,7 @@ Panel {
   id: root
   moduleName: "dev.hibermachy"
   ipcTarget: "dev.hibermachy"
+  manageIpc: false
 
   property var service: null
   property var anchorItem: null
@@ -18,6 +19,10 @@ Panel {
   property int draftHibernateDelaySeconds: 7200
   property bool draftHibernateOnAcPower: false
   property bool systemDraftDirty: false
+  property bool confirmationOpen: false
+  property string manualRequestResult: ""
+
+  readonly property string confirmationMessage: statusSnapshot ? statusSnapshot.manualConfirmationMessage : "Manual staged sleep is unavailable."
 
   function open() {
     refresh()
@@ -87,6 +92,19 @@ Panel {
     return service.resetSystemPolicy()
   }
 
+  function beginConfirmation() {
+    refresh()
+    if (statusSnapshot && statusSnapshot.manualStagedSleepReadiness === "ready") confirmationOpen = true
+  }
+
+  function cancelConfirmation() { confirmationOpen = false }
+
+  function submitConfirmedRequest() {
+    confirmationOpen = false
+    manualRequestResult = service ? service.requestStagedSleep()
+      : JSON.stringify({ kind: "failed", reasonCode: "HBR-SLEEP-SERVICE-UNAVAILABLE" })
+  }
+
   onStatusSnapshotChanged: refresh()
 
   KeyboardPanel {
@@ -97,6 +115,29 @@ Panel {
     open: root.opened
     contentWidth: fittedContentWidth(Style.space(420))
     contentHeight: fittedContentHeight(content.implicitHeight)
+    focusTarget: keyCatcher
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      onMoveRequested: function(dx, dy) {
+        if (root.confirmationOpen && (dx !== 0 || dy !== 0))
+          confirmation.selectedIndex = confirmation.selectedIndex === 0 ? 1 : 0
+      }
+      onTabRequested: function(direction) {
+        if (root.confirmationOpen)
+          confirmation.selectedIndex = confirmation.selectedIndex === 0 ? 1 : 0
+      }
+      onActivateRequested: {
+        if (!root.confirmationOpen) root.beginConfirmation()
+        else if (confirmation.selectedIndex === 0) root.cancelConfirmation()
+        else root.submitConfirmedRequest()
+      }
+      onCloseRequested: {
+        if (root.confirmationOpen) root.cancelConfirmation()
+        else root.close()
+      }
+    }
 
     Column {
       id: content
@@ -156,6 +197,25 @@ Panel {
       PanelSeparator { width: parent.width }
 
       PanelSectionHeader { text: "System policy" }
+
+      Button {
+        width: parent.width
+        text: "Suspend then Hibernate"
+        enabled: root.statusSnapshot && root.statusSnapshot.manualStagedSleepReadiness === "ready"
+        bordered: true
+        onClicked: root.beginConfirmation()
+      }
+
+      Text {
+        width: parent.width
+        visible: root.manualRequestResult.length > 0
+        textFormat: Text.PlainText
+        text: root.manualRequestResult
+        color: Color.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WordWrap
+      }
 
       Text {
         width: parent.width
@@ -225,6 +285,17 @@ Panel {
         font.pixelSize: Style.font.body
         wrapMode: Text.WordWrap
       }
+    }
+
+    ConfirmDialog {
+      id: confirmation
+      anchors.fill: parent
+      opened: root.confirmationOpen
+      message: root.confirmationMessage
+      confirmText: "Request staged sleep"
+      z: 10
+      onCanceled: root.cancelConfirmation()
+      onConfirmed: root.submitConfirmedRequest()
     }
   }
 }

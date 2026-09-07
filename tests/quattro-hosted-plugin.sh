@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_SIM_SUSPEND=0 HIBERMACHY_EXPECTED_KIND=refused "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=missing HIBERMACHY_EXPECTED_KIND=accepted "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_OPEN_BOOT=prior-boot "$0"
+  exit 0
+fi
+
 plugin_id='dev.hibermachy'
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/hibermachy-quattro-host-XXXXXX")
 policy_path="$test_root/xdg-config/hibermachy/user-policy.json"
@@ -22,6 +35,10 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$test_root/.config/omarchy/plugins"
+mkdir -p "$test_root/.local/state/hibermachy"
+if [[ -n "${HIBERMACHY_SEED_OPEN_BOOT:-}" ]]; then
+  node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({schemaVersion:1,openAttempt:{attemptId:"prior-attempt",origin:"manual",selectedMode:"suspend-then-hibernate",bootId:process.argv[2]},terminalOutcomes:[],suppressionSummaries:[],notificationFingerprints:[]})+"\n")' "$test_root/.local/state/hibermachy/outcomes.json" "$HIBERMACHY_SEED_OPEN_BOOT"
+fi
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
 
