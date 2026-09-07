@@ -22,6 +22,7 @@ Item {
   property var lastSubmission: null
   property var lastObservation: observeSleepExecutability()
   property var historyDocument: emptyHistory()
+  property var evidenceSubscription: null
 
   readonly property var statusSnapshot: ({
     pluginActivation: "active",
@@ -141,13 +142,27 @@ Item {
 
   function persistHistory(allowOpenAttemptDuringDiagnosticFault): bool {
     if (allowOpenAttemptDuringDiagnosticFault && simulatedBoolean("HIBERMACHY_SIM_OPEN_ATTEMPT_FAILURE", false)) return false
-    if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) historyHealthy = false
-    if (!historyHealthy && !allowOpenAttemptDuringDiagnosticFault) {
+    var diagnosticFault = simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)
+    if (diagnosticFault) historyHealthy = false
+    if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_WRITE_FAILURE", false)) {
       historyHealthy = false
       return false
     }
     historyFile.setText(JSON.stringify(historyDocument, null, 2) + "\n")
     return true
+  }
+
+  function subscribeTypedEvidence(attemptId): var {
+    var subscription = {
+      attemptId: attemptId,
+      subscribedBeforeEnqueue: true,
+      signals: ["PrepareForSleep", "UnitResult", "TransactionReturn"],
+      entryWindowMs: entryEvidenceWindowMs,
+      postResumeWindowMs: postResumeEvidenceWindowMs,
+      deadlinePausesWhileUserspaceFrozen: true
+    }
+    evidenceSubscription = subscription
+    return subscription
   }
 
   function persistLatch(): bool {
@@ -248,9 +263,10 @@ Item {
     }
 
     var attemptId = "manual-" + nextAttemptNumber++
+    var subscription = subscribeTypedEvidence(attemptId)
     var openAttempt = eventEnvelope(attemptId, origin, selectedMode, "request-enqueue", null,
       "HBR-SLEEP-ENQUEUE-PENDING", "typed-subscription", {
-        evidenceSubscribedBeforeEnqueue: true, entryEvidenceWindowMs: entryEvidenceWindowMs,
+        evidenceSubscribedBeforeEnqueue: subscription.subscribedBeforeEnqueue, entryEvidenceWindowMs: subscription.entryWindowMs,
         postResumeEvidenceWindowMs: postResumeEvidenceWindowMs, deadlinesPauseWhileUserspaceFrozen: true
       })
     var next = clone(historyDocument)
@@ -274,7 +290,8 @@ Item {
           postResumeEvidenceWindowMs: postResumeEvidenceWindowMs,
           userspaceFreezeExcludedFromDeadline: true, freeFormJournalUsedForState: false,
           evidenceSubscribedBeforeEnqueue: true,
-          evidencePhases: ["entry", "resume", "transaction-return"]
+          evidencePhases: ["entry", "resume", "transaction-return"],
+          typedSignalsObserved: evidenceSubscription.signals
         }))
       executionInProgress = false
     }
