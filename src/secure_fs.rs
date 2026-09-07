@@ -207,9 +207,10 @@ fn recognized_existing_target(
 }
 
 #[cfg(feature = "test-support")]
-fn inject_reset_fault(stage: &str) -> Result<(), &'static str> {
+fn inject_fault(stage: &str) -> Result<(), &'static str> {
     if std::env::var_os("HIBERMACHY_TEST_FAULT").as_deref() == Some(stage.as_ref()) {
         return Err(match stage {
+            "write" => "write interrupted",
             "remove" => "removal interrupted",
             "sync" => "synchronization failed",
             "readback" => "readback indeterminate",
@@ -221,7 +222,7 @@ fn inject_reset_fault(stage: &str) -> Result<(), &'static str> {
 }
 
 #[cfg(not(feature = "test-support"))]
-fn inject_reset_fault(_stage: &str) -> Result<(), &'static str> {
+fn inject_fault(_stage: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
@@ -257,14 +258,14 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
             return Err("remove failed");
         }
         moved = true;
-        inject_reset_fault("remove")?;
+        inject_fault("remove")?;
         synchronize(&directory)?;
-        inject_reset_fault("sync")?;
+        inject_fault("sync")?;
         if recognized_existing_target(&directory, &target)?.is_some() {
             return Err("readback contradictory");
         }
-        inject_reset_fault("readback")?;
-        inject_reset_fault("contradictory")?;
+        inject_fault("readback")?;
+        inject_fault("contradictory")?;
         // The directory state was synchronized and absence was read back before cleanup.
         // SAFETY: only the temporary object created by this invocation is removed.
         if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
@@ -316,28 +317,12 @@ pub fn replace_and_verify(
         0o600,
     )?;
     validate_regular_file(&temp.metadata().map_err(|_| "unsafe filesystem state")?)?;
-    #[cfg(feature = "test-support")]
-    let injected = |stage: &str| {
-        if std::env::var_os("HIBERMACHY_TEST_FAULT").as_deref() == Some(stage.as_ref()) {
-            Err(match stage {
-                "write" => "write interrupted",
-                "sync" => "synchronization failed",
-                "readback" => "readback indeterminate",
-                "contradictory" => "readback contradictory",
-                _ => "injected failure",
-            })
-        } else {
-            Ok(())
-        }
-    };
-    #[cfg(not(feature = "test-support"))]
-    let injected = |_stage: &str| Ok(());
     let mut replaced = false;
     let result = (|| {
         temp.write_all(bytes).map_err(|_| "write failed")?;
-        injected("write")?;
+        inject_fault("write")?;
         synchronize(&temp)?;
-        injected("sync")?;
+        inject_fault("sync")?;
         if recognized_existing_target(&directory, &target)? != previous_policy {
             return Err("target changed");
         }
@@ -369,14 +354,14 @@ pub fn replace_and_verify(
         }
         replaced = true;
         synchronize(&directory)?;
-        injected("readback")?;
+        inject_fault("readback")?;
         let mut policy = call_openat(&directory, &target, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0)?;
         validate_regular_file(&policy.metadata().map_err(|_| "unsafe filesystem state")?)?;
         let mut actual = Vec::new();
         policy
             .read_to_end(&mut actual)
             .map_err(|_| "readback indeterminate")?;
-        injected("contradictory")?;
+        inject_fault("contradictory")?;
         if actual != bytes {
             return Err("readback contradictory");
         }
