@@ -39,8 +39,8 @@ fn package_installs_only_root_owned_helper_and_polkit_declaration() {
 fn polkit_requires_fresh_administrator_authentication_for_the_helper() {
     let policy = packaging_file("org.hibermachy.policy-helper.policy");
 
-    assert!(policy.contains("<allow_any>auth_admin</allow_any>"));
-    assert!(policy.contains("<allow_inactive>auth_admin</allow_inactive>"));
+    assert!(policy.contains("<allow_any>no</allow_any>"));
+    assert!(policy.contains("<allow_inactive>no</allow_inactive>"));
     assert!(policy.contains("<allow_active>auth_admin</allow_active>"));
     assert!(policy.contains("org.freedesktop.policykit.exec.path"));
     assert!(policy.contains("/usr/libexec/hibermachy-policy-helper"));
