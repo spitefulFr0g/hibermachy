@@ -51,7 +51,8 @@ activation_state() {
 }
 
 menu_state() {
-  local file="$root/menu.json"
+  local file="$root/menu.jsonc"
+  [[ -e "$file" || -L "$file" ]] || file="$root/menu.json"
   menu_document() {
     awk 'BEGIN { in_string = 0; escaped = 0; in_comment = 0; in_block_comment = 0 }
       {
@@ -84,19 +85,20 @@ menu_state() {
         print output
       }' "$file"
   }
+  menu_entries() { menu_document | jq 'if (.entries | type) == "array" then .entries else to_entries | map(.value + {id:.key}) end'; }
   if [[ -L "$file" ]]; then
     scope inaccessible user-owned 'Preserve a suspicious shared menu filesystem object for explicit resolution.'
   elif [[ ! -e "$file" ]]; then
     missing_scope user-owned 'Reconcile the namespaced menu contribution only after validating shared menu state.'
-  elif ! menu_document | jq -e '.entries | type == "array"' >/dev/null 2>&1; then
+  elif ! menu_document | jq -e 'type == "object" and ((.entries | type == "array") or (to_entries | all(.value | type == "object")))' >/dev/null 2>&1; then
     scope modified user-owned 'Preserve malformed shared menu state for explicit resolution.'
-  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | group_by(.id) | map(length > 1 or .[0].managedBy != "hibermachy") | any' >/dev/null; then
+  elif menu_entries | jq -e '[.[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | group_by(.id) | map(length > 1 or .[0].managedBy != "hibermachy") | any' >/dev/null; then
     scope colliding user-owned 'Preserve the colliding shared entry; do not overwrite it.'
-  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | sort_by(.id) | (length == 2 and .[0].id == "setup.hibermachy" and .[0].managedBy == "hibermachy" and .[0].label == "Sleep & Hibernation" and .[0].action == "open" and .[1].id == "system.hibermachy-staged-sleep" and .[1].managedBy == "hibermachy" and .[1].label == "Suspend then Hibernate" and .[1].action == "requestStagedSleep")' >/dev/null; then
+  elif menu_entries | jq -e '[.[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | sort_by(.id) | (length == 2 and .[0].id == "setup.hibermachy" and .[0].managedBy == "hibermachy" and .[0].label == "Sleep & Hibernation" and .[1].id == "system.hibermachy-staged-sleep" and .[1].managedBy == "hibermachy" and .[1].label == "Suspend then Hibernate")' >/dev/null; then
     scope compatible user-owned 'Managed entries are present; their actions still require a compatible live service.'
-  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' >/dev/null; then
+  elif menu_entries | jq -e '[.[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep") | select(.managedBy == "hibermachy")] | length > 0' >/dev/null; then
     scope modified user-owned 'Preserve modified managed entries until their generated shape is explicitly resolved.'
-  elif menu_document | jq -e '[.entries[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | length > 0' >/dev/null; then
+  elif menu_entries | jq -e '[.[] | select(.id == "setup.hibermachy" or .id == "system.hibermachy-staged-sleep")] | length > 0' >/dev/null; then
     scope incomplete user-owned 'Reconcile both recognized entries without changing unrelated shared menu state.'
   else
     missing_scope user-owned 'Add only the recognized namespaced entries during setup.'
