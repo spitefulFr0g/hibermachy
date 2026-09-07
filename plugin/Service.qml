@@ -1,7 +1,8 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 
-QtObject {
+Item {
   id: root
 
   readonly property var statusSnapshot: ({
