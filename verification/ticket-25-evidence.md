@@ -35,7 +35,8 @@ gate, independent review, or clean-room gate is performed here.
   standards violation or baseline smell found.
 - Spec review: no missing in-scope requirement or scope creep found; Ticket 23
   clean-room and independent security-aware review remain explicitly separate.
-- Replacement candidate: implementation commit `a4ad937` (full immutable
-  identity recorded by `git rev-parse a4ad937^{commit}`).
-- Commit: `a4ad937` — `Harden Ticket 25 process boundaries`.
+- Replacement candidate: implementation commit
+  `a4ad937b7c1fceaaa661cda2963ddad161934da0`.
+- Commit: `a4ad937b7c1fceaaa661cda2963ddad161934da0` — `Harden Ticket 25
+  process boundaries`.
 - Completion: blocked until the Rust helper tests can execute and pass.
