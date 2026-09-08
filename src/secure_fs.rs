@@ -11,6 +11,7 @@ use std::{
         unix::fs::MetadataExt,
     },
 };
+use std::sync::OnceLock;
 
 use std::os::raw::{c_char, c_int, c_uint};
 
@@ -41,6 +42,43 @@ unsafe extern "C" {
     fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     fn fsync(fd: c_int) -> c_int;
     fn flock(fd: c_int, operation: c_int) -> c_int;
+    fn chdir(path: *const c_char) -> c_int;
+    fn umask(mask: c_uint) -> c_uint;
+    fn clearenv() -> c_int;
+    fn close_range(first: c_uint, last: c_uint, flags: c_uint) -> c_int;
+    fn getrandom(buffer: *mut u8, length: usize, flags: c_uint) -> isize;
+}
+
+#[cfg(feature = "test-support")]
+static TEST_FAULT: OnceLock<Option<String>> = OnceLock::new();
+#[cfg(feature = "test-support")]
+static TEST_RESET_TEMP: OnceLock<Option<String>> = OnceLock::new();
+
+/// Establish the helper's process contract before parsing or touching policy.
+/// Production ignores its inherited environment and starts in a fixed directory
+/// with no caller-provided descriptors beyond standard streams.
+pub fn initialize_process() -> Result<(), &'static str> {
+    #[cfg(feature = "test-support")]
+    {
+        TEST_FAULT.get_or_init(|| std::env::var("HIBERMACHY_TEST_FAULT").ok());
+        TEST_RESET_TEMP.get_or_init(|| std::env::var("HIBERMACHY_TEST_RESET_TEMP").ok());
+    }
+    let root = c_name("/")?;
+    // SAFETY: fixed NUL-terminated path and process-wide startup controls.
+    if unsafe { chdir(root.as_ptr()) } != 0 {
+        return Err("startup hygiene failed");
+    }
+    // SAFETY: umask has no pointer arguments and applies only to this process.
+    unsafe { umask(0o077) };
+    // SAFETY: preserve stdin/stdout/stderr and close every inherited descriptor.
+    if unsafe { close_range(3, u32::MAX, 0) } != 0 {
+        return Err("startup hygiene failed");
+    }
+    // SAFETY: the helper has no reason to consume caller-controlled environment.
+    if unsafe { clearenv() } != 0 {
+        return Err("startup hygiene failed");
+    }
+    Ok(())
 }
 
 fn c_name(name: &str) -> Result<CString, &'static str> {
@@ -165,6 +203,15 @@ fn recognized_policy(bytes: &[u8]) -> bool {
     matches!(ac, "yes\n" | "no\n")
 }
 
+fn random_suffix() -> Result<String, &'static str> {
+    let mut bytes = [0_u8; 16];
+    // SAFETY: the buffer is valid for exactly its declared length.
+    if unsafe { getrandom(bytes.as_mut_ptr(), bytes.len(), 0) } != bytes.len() as isize {
+        return Err("temporary name unavailable");
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 fn recognized_existing_target(
     directory: &File,
     target: &CString,
@@ -208,7 +255,7 @@ fn recognized_existing_target(
 
 #[cfg(feature = "test-support")]
 fn inject_fault(stage: &str) -> Result<(), &'static str> {
-    if std::env::var_os("HIBERMACHY_TEST_FAULT").as_deref() == Some(stage.as_ref()) {
+    if TEST_FAULT.get().and_then(Option::as_deref) == Some(stage) {
         return Err(match stage {
             "write" => "write interrupted",
             "remove" => "removal interrupted",
@@ -238,10 +285,12 @@ pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), 
         return Ok(());
     };
     #[cfg(feature = "test-support")]
-    let temporary_suffix = std::env::var("HIBERMACHY_TEST_RESET_TEMP")
-        .unwrap_or_else(|_| std::process::id().to_string());
+    let temporary_suffix = TEST_RESET_TEMP
+        .get()
+        .and_then(Clone::clone)
+        .unwrap_or(random_suffix()?);
     #[cfg(not(feature = "test-support"))]
-    let temporary_suffix = std::process::id().to_string();
+    let temporary_suffix = random_suffix()?;
     let temporary = c_name(&format!(".{target_name}.{temporary_suffix}.reset.tmp"))?;
     let mut moved = false;
     let mut removed = false;
@@ -370,7 +419,7 @@ pub fn replace_and_verify(
     let target = c_name(target_name)?;
     let previous_policy = recognized_existing_target(&directory, &target)?;
     let had_previous_policy = previous_policy.is_some();
-    let temporary = c_name(&format!(".{target_name}.{}.tmp", std::process::id()))?;
+    let temporary = c_name(&format!(".{target_name}.{}.tmp", random_suffix()?))?;
     let mut temp = call_openat(
         &directory,
         &temporary,

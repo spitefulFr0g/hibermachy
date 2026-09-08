@@ -65,6 +65,7 @@ fn parse_apply(arguments: &[String]) -> Result<RequestedSystemPolicy, &'static s
 }
 
 fn run() -> Result<(), &'static str> {
+    secure_fs::initialize_process()?;
     let arguments: Vec<String> = env::args().skip(1).collect();
     let (command, values) = arguments.split_first().ok_or("invalid command")?;
     if command == "probe" && values.is_empty() {

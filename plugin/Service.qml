@@ -6,12 +6,15 @@ import Quickshell.Wayland
 Item {
   id: root
 
-  readonly property string stateDirectory: String(Quickshell.env("HIBERMACHY_STATE_DIR") || Quickshell.env("HOME") + "/.local/state/hibermachy")
+  // Test mode is an explicit fixture seam used only by the hosted merge gate.
+  // Production path and executable selection never consult test overrides.
+  readonly property bool testMode: Quickshell.env("HBR_TEST_MODE") === "1"
+  readonly property string stateDirectory: String((testMode && Quickshell.env("HIBERMACHY_STATE_DIR")) || Quickshell.env("HOME") + "/.local/state/hibermachy")
   readonly property string historyPath: stateDirectory + "/outcomes.json"
   readonly property string latchPath: stateDirectory + "/rearm-latch.json"
-  readonly property string bootId: String(Quickshell.env("HIBERMACHY_SIM_BOOT_ID") || "simulated-boot")
+  readonly property string bootId: String((testMode && Quickshell.env("HIBERMACHY_SIM_BOOT_ID")) || "simulated-boot")
   readonly property string serviceGeneration: "service-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)
-  readonly property int entryEvidenceWindowMs: Math.max(30000, Number(Quickshell.env("HIBERMACHY_SIM_INHIBITOR_DELAY_MS") || 0) + 10000)
+  readonly property int entryEvidenceWindowMs: Math.max(30000, Number((testMode && Quickshell.env("HIBERMACHY_SIM_INHIBITOR_DELAY_MS")) || 0) + 10000)
   readonly property int postResumeEvidenceWindowMs: 30000
   property bool executionInProgress: false
   property bool rearmRequired: true
@@ -28,13 +31,13 @@ Item {
   property int nextEventNumber: 1
   property int simulatedSleepSubmissionCount: 0
   property var lastSubmission: null
-  property var testClockMs: Quickshell.env("HBR_TEST_CLOCK_START_MS") ? Number(Quickshell.env("HBR_TEST_CLOCK_START_MS")) : null
+  property var testClockMs: testMode && Quickshell.env("HBR_TEST_CLOCK_START_MS") ? Number(Quickshell.env("HBR_TEST_CLOCK_START_MS")) : null
   property var liveSleepCapabilities: null
   property bool sleepCapabilityProbeHealthy: false
   property var lastObservation: observeSleepExecutability()
   property var historyDocument: emptyHistory()
   property var evidenceSubscription: null
-  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config"
+  readonly property string configHome: (testMode && Quickshell.env("XDG_CONFIG_HOME")) || Quickshell.env("HOME") + "/.config"
   readonly property string policyDirectory: configHome + "/hibermachy"
   readonly property string policyPath: policyDirectory + "/user-policy.json"
   property var policySnapshot: null
@@ -51,11 +54,11 @@ Item {
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
   property string systemPolicyMutation: ""
-  property var systemPolicyFixture: ({ authorization: Quickshell.env("HBR_TEST_MODE") === "1" ? "authorized" : "unavailable" })
-  readonly property string helperPath: Quickshell.env("HBR_POLICY_HELPER_PATH") || "/usr/libexec/hibermachy-policy-helper"
-  readonly property string helperLauncherPath: Quickshell.env("HBR_POLICY_HELPER_LAUNCHER") || "pkexec"
-  readonly property string effectivePolicyReaderPath: Quickshell.env("HBR_EFFECTIVE_POLICY_READER") || "/usr/bin/systemd-analyze"
-  readonly property string contractProbePath: Quickshell.env("HBR_CONTRACT_PROBE") || "/usr/bin/omarchy-contract-probe"
+  property var systemPolicyFixture: ({ authorization: testMode ? "authorized" : "unavailable" })
+  readonly property string helperPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_PATH")) || "/usr/libexec/hibermachy-policy-helper"
+  readonly property string helperLauncherPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_LAUNCHER")) || "/usr/bin/pkexec"
+  readonly property string effectivePolicyReaderPath: (testMode && Quickshell.env("HBR_EFFECTIVE_POLICY_READER")) || "/usr/bin/systemd-analyze"
+  readonly property string contractProbePath: (testMode && Quickshell.env("HBR_CONTRACT_PROBE")) || "/usr/bin/omarchy-contract-probe"
   property bool contractProbeComplete: false
   property var contractSnapshot: null
 
@@ -286,7 +289,7 @@ Item {
     _coordinateStagedSleep("automatic")
   }
 
-  property var testActivityFixture: Quickshell.env("HBR_TEST_MODE") === "1" ? ({ idle: false, inhibited: false }) : null
+  property var testActivityFixture: testMode ? ({ idle: false, inhibited: false }) : null
   property var testStayAwakeFixture: null
 
   function setActivityFixture(fixtureJson): string {
@@ -306,7 +309,7 @@ Item {
   }
 
   function setStayAwakeFixture(fixtureJson): string {
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    if (!testMode) return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
     try {
       var fixture = JSON.parse(String(fixtureJson))
       if (!fixture || typeof fixture !== "object") throw new Error("fixture")
@@ -341,6 +344,7 @@ Item {
   }
 
   function simulatedBoolean(name, fallback): bool {
+    if (!testMode) return fallback
     var value = String(Quickshell.env(name) || "").toLowerCase()
     if (value === "1" || value === "true" || value === "yes") return true
     if (value === "0" || value === "false" || value === "no") return false
@@ -348,7 +352,7 @@ Item {
   }
 
   function observeSleepExecutability(): var {
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+    if (!testMode) {
       if (!sleepCapabilityProbeHealthy || !liveSleepCapabilities) return { observationFailed: true }
       return liveSleepCapabilities
     }
@@ -385,7 +389,7 @@ Item {
   }
 
   function setClockFixture(fixtureJson): string {
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    if (!testMode) return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
     try {
       var fixture = JSON.parse(String(fixtureJson))
       if (!fixture || !Number.isSafeInteger(fixture.nowMs) || fixture.nowMs < 0) throw new Error("clock")
@@ -395,7 +399,7 @@ Item {
   }
 
   function runAcceleratedSoak(transitions: int): string {
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
+    if (!testMode) return result("refused", "HBR-TEST-FIXTURE-UNAVAILABLE", {})
     var count = Number(transitions)
     if (!Number.isSafeInteger(count) || count < 1 || count > 5000) return result("refused", "HBR-TEST-SOAK-INVALID", {})
     var accepted = 0
@@ -720,7 +724,7 @@ Item {
   }
 
   function setSystemPolicyFixture(fixtureJson): string {
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
+    if (!testMode) return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
     try { systemPolicyFixture = JSON.parse(String(fixtureJson)) }
     catch (error) { return policyReceipt(false, "HBR-SYSTEM-POLICY-FIXTURE-MALFORMED") }
     return policyReceipt(true, "HBR-SYSTEM-POLICY-FIXTURE-SET")
@@ -740,7 +744,7 @@ Item {
     if (fixture.readback === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE")
     var requested = { hibernateDelaySeconds: systemPolicyDraft.hibernateDelaySeconds,
       hibernateOnAcPower: systemPolicyDraft.hibernateOnAcPower, scope: "machine-wide" }
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+    if (!testMode) {
       systemPolicyBusy = true
       systemPolicyMutation = "apply"
       helperProcess.command = [helperLauncherPath, helperPath, "apply", String(requested.hibernateDelaySeconds), requested.hibernateOnAcPower ? "yes" : "no"]
@@ -770,7 +774,7 @@ Item {
   function resetSystemPolicy(): string {
     if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+    if (!testMode) {
       systemPolicyBusy = true
       systemPolicyMutation = "reset"
       helperProcess.command = [helperLauncherPath, helperPath, "reset"]
@@ -845,9 +849,9 @@ Item {
       openAttemptPersistedBeforeEnqueue: true, evidenceSubscribedBeforeEnqueue: true }
     simulatedSleepSubmissionCount += 1
 
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+    if (!testMode) {
       lastSubmission.simulated = false
-      sleepRequestProcess.command = ["systemctl", selectedMode === "suspend" ? "suspend" : "suspend-then-hibernate"]
+      sleepRequestProcess.command = ["/usr/bin/systemctl", selectedMode === "suspend" ? "suspend" : "suspend-then-hibernate"]
       sleepRequestProcess.running = true
       return result("accepted", "HBR-SLEEP-ACCEPTED", { attemptId: attemptId,
         selectedMode: selectedMode, selectionPath: selectionPath })
@@ -888,7 +892,7 @@ Item {
 
   Process {
     id: sleepCapabilityProbe
-    command: ["loginctl", "show-logind", "-p", "CanSuspend", "-p", "CanHibernate", "-p", "CanSuspendThenHibernate", "-p", "BlockInhibited"]
+    command: ["/usr/bin/loginctl", "show-logind", "-p", "CanSuspend", "-p", "CanHibernate", "-p", "CanSuspendThenHibernate", "-p", "BlockInhibited"]
     stdout: StdioCollector { id: sleepCapabilityStdout; waitForEnd: true }
     onExited: function(exitCode) {
       var values = {}
@@ -939,7 +943,7 @@ Item {
 
   Process {
     id: stayAwakeProbe
-    command: ["omarchy-toggle-idle", "status"]
+    command: ["/usr/bin/omarchy-toggle-idle", "status"]
     stdout: StdioCollector { id: stayAwakeStdout; waitForEnd: true }
     onExited: function(exitCode) {
       var parsed = null
@@ -951,14 +955,14 @@ Item {
   Timer {
     interval: 250
     repeat: true
-    running: Quickshell.env("HBR_TEST_MODE") !== "1"
+    running: !root.testMode
     onTriggered: if (!stayAwakeProbe.running) stayAwakeProbe.running = true
   }
 
   Timer {
     interval: 250
     repeat: true
-    running: Quickshell.env("HBR_TEST_MODE") !== "1"
+    running: !root.testMode
     onTriggered: if (!sleepCapabilityProbe.running) sleepCapabilityProbe.running = true
   }
 
@@ -971,7 +975,7 @@ Item {
         root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-WRITE-FAILED"
         return
       }
-      if (Quickshell.env("HBR_TEST_MODE") !== "1") {
+      if (!root.testMode) {
         if (root.systemPolicyMutation === "apply") {
           root.requestedSystemPolicy = root.systemPolicyDraft
           root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-PENDING"
@@ -1083,9 +1087,11 @@ Item {
 
   Process {
     id: policyPermissionProbe
-    command: ["/bin/sh", "-c", "mode=$(stat -c %a \"$1\") || exit 1; case \"$mode\" in 2*|3*|6*|7*) exit 0;; *) exit 1;; esac", "hibermachy-policy-permission", root.policyDirectory]
+    command: ["/usr/bin/stat", "-c", "%a", root.policyDirectory]
+    stdout: StdioCollector { id: policyPermissionStdout; waitForEnd: true }
     onExited: function(exitCode) {
-      root.policyDirectoryWritable = exitCode === 0
+      var mode = String(policyPermissionStdout.text || "").trim()
+      root.policyDirectoryWritable = exitCode === 0 && /^(2|3|6|7)/.test(mode)
       if (exitCode !== 0 && root.policyAccepted) root.policyReasonCode = "HBR-POLICY-PERSISTENCE"
     }
   }
@@ -1110,10 +1116,10 @@ Item {
   }
 
   Component.onCompleted: {
-    if (Quickshell.env("HBR_TEST_MODE") === "1") idleMonitorHealthy = true
+    if (root.testMode) idleMonitorHealthy = true
     contractProbe.running = true
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") sleepCapabilityProbe.running = true
-    if (Quickshell.env("HBR_TEST_MODE") !== "1") initialPolicyProbe.running = true
+    if (!root.testMode) sleepCapabilityProbe.running = true
+    if (!root.testMode) initialPolicyProbe.running = true
     policyFile.reload()
     historyFile.reload()
     latchFile.reload()
