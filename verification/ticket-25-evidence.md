@@ -48,10 +48,11 @@ gate, independent review, or clean-room gate is performed here.
   and parent spec: no missing/partial in-scope requirement, scope creep, or
   incorrect implementation found. Ticket 23 clean-room and independent
   security-aware review remain explicitly separate.
-- Replacement candidate: implementation commit
-  `a4ad937b7c1fceaaa661cda2963ddad161934da0`.
-- Commit: `a4ad937b7c1fceaaa661cda2963ddad161934da0` — `Harden Ticket 25
-  process boundaries`.
+- Replacement candidate: final implementation/evidence commit
+  `9ed3fafd2f072059843a10697c8945f0824e9b73`.
+- Commits: `a4ad937b7c1fceaaa661cda2963ddad161934da0` — `Harden Ticket 25
+  process boundaries`; `9ed3fafd2f072059843a10697c8945f0824e9b73` — `Complete Ticket 25
+  Rust verification`.
 - Completion: all Ticket 25 acceptance evidence is satisfied. No real system,
   package, policy, sleep, hardware, release, merge, push, integration, or
   independent-review action was performed or claimed.
