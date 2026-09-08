@@ -2,6 +2,7 @@
 //! The sole unsafe boundary. It wraps Linux descriptor-relative operations so the
 //! policy layer can neither select paths nor follow attacker-controlled links.
 
+use std::sync::OnceLock;
 use std::{
     ffi::CString,
     fs::{File, Metadata},
@@ -11,7 +12,6 @@ use std::{
         unix::fs::MetadataExt,
     },
 };
-use std::sync::OnceLock;
 
 use std::os::raw::{c_char, c_int, c_uint};
 
