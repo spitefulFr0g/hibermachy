@@ -10,24 +10,25 @@ const path = require("node:path");
 
 const root = process.argv[2];
 const source = fs.readFileSync(path.join(root, "plugin/Service.qml"), "utf8");
-function qmlBody(marker, offset = 0) {
-  const start = source.indexOf(marker, offset);
+function qmlBody(sourceText, marker, offset = 0) {
+  const start = sourceText.indexOf(marker, offset);
   assert.notEqual(start, -1, marker + " must remain available");
-  const open = source.indexOf("{", start);
+  const open = sourceText.indexOf("{", start);
   let depth = 0;
   let close = -1;
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    if (source[index] === "}" && --depth === 0) { close = index; break; }
+  for (let index = open; index < sourceText.length; index += 1) {
+    if (sourceText[index] === "{") depth += 1;
+    if (sourceText[index] === "}" && --depth === 0) { close = index; break; }
   }
   assert.notEqual(close, -1, marker + " body must be balanced");
-  return source.slice(open + 1, close);
+  return sourceText.slice(open + 1, close);
 }
-const apply = new Function("context", `with (context) { ${qmlBody("function applySystemPolicy(): string {")} }`);
-const reset = new Function("context", `with (context) { ${qmlBody("function resetSystemPolicy(): string {")} }`);
+const apply = new Function("context", `with (context) { ${qmlBody(source, "function applySystemPolicy(): string {")} }`);
+const reset = new Function("context", `with (context) { ${qmlBody(source, "function resetSystemPolicy(): string {")} }`);
 const helperStart = source.indexOf("id: helperProcess");
 assert.notEqual(helperStart, -1, "helper process must remain available");
-const helperExited = new Function("root", "exitCode", qmlBody("onExited: function(exitCode) {", helperStart));
+const helperExited = new Function("root", "exitCode", qmlBody(source, "onExited: function(exitCode) {", helperStart));
+const loadReadback = new Function("context", "text", "exitCode", `with (context) { ${qmlBody(source, "function loadSystemPolicyReadback(text, exitCode) {")} }`);
 
 function context(testMode) {
   return {
@@ -102,10 +103,27 @@ for (const [exitCode, expected] of [[126, "HBR-SYSTEM-POLICY-AUTH-CANCELLED"], [
 }
 
 const panel = fs.readFileSync(path.join(root, "plugin/Panel.qml"), "utf8");
-assert.match(panel, /Latest system policy request result:/);
-assert.match(panel, /statusSnapshot\.lastSystemPolicyMutationResult/);
-assert.match(panel, /Cancelled\. No system policy was changed\./);
-assert.doesNotMatch(panel, /Latest system policy request result: " \+ \(root\.statusSnapshot\.lastSystemPolicyMutationResult/);
+const panelMutationMessage = new Function("reasonCode", qmlBody(panel, "function systemPolicyMutationMessage(reasonCode) {"));
+const panelActionMessage = new Function("receiptText", "systemPolicyMutationMessage", qmlBody(panel, "function systemPolicyActionMessage(receiptText) {"));
+assert.equal(panelActionMessage(JSON.stringify({ reasonCode: "HBR-SYSTEM-POLICY-AUTH-CANCELLED" }), panelMutationMessage), "Cancelled. No system policy was changed.");
+assert.equal(panelActionMessage("not json", panelMutationMessage), "Could not read the system policy request result.");
+assert.doesNotMatch(panelActionMessage(JSON.stringify({ reasonCode: "HBR-SYSTEM-POLICY-AUTH-CANCELLED" }), panelMutationMessage), /HBR-/);
+
+const poll = {
+  requestedSystemPolicy: { hibernateDelaySeconds: 7200, hibernateOnAcPower: false },
+  effectiveSystemPolicy: { hibernateDelaySeconds: 7200, hibernateOnAcPower: false },
+  systemPolicyProvenance: [],
+  systemPolicyReasonCode: "HBR-SYSTEM-POLICY-APPLIED",
+  systemPolicyMutation: "",
+  lastSystemPolicyMutationResult: "HBR-SYSTEM-POLICY-AUTH-CANCELLED",
+  validSystemPolicy: () => true,
+  systemPolicyMatches: () => true,
+  requireFreshActivity: () => {}
+};
+loadReadback(poll, JSON.stringify({ requested: poll.requestedSystemPolicy, effective: poll.effectiveSystemPolicy, provenance: [] }), 0);
+assert.equal(poll.systemPolicyReasonCode, "HBR-SYSTEM-POLICY-APPLIED");
+assert.equal(poll.lastSystemPolicyMutationResult, "HBR-SYSTEM-POLICY-AUTH-CANCELLED");
+assert.match(source, /id: initialPolicyProbe[\s\S]*onExited: function\(exitCode\) \{ root\.loadSystemPolicyReadback\(initialPolicyStdout\.text, exitCode\) \}/);
 NODE
 
-printf '%s\n' 'HBR-CHK-SYSTEM-POLICY-DISPATCH-001 production ignores fixtures, reports authentication cancellation, and preserves live policy readiness'
+printf '%s\n' 'HBR-CHK-SYSTEM-POLICY-DISPATCH-001 reports safe policy-request feedback while preserving live readiness and prior cancellation'

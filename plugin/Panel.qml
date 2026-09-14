@@ -72,6 +72,7 @@ Panel {
     return formatDuration(policy.hibernateDelaySeconds) + ", plugged in " + (policy.hibernateOnAcPower ? "yes" : "no")
   }
   function systemPolicyMutationMessage(reasonCode) {
+    if (!reasonCode) return "No request has been made."
     if (reasonCode === "HBR-SYSTEM-POLICY-AUTH-CANCELLED") return "Cancelled. No system policy was changed."
     if (reasonCode === "HBR-SYSTEM-POLICY-UNAVAILABLE") return "Authentication is unavailable. No system policy was changed."
     if (reasonCode === "HBR-SYSTEM-POLICY-SUBMITTED") return "Request submitted for authentication."
@@ -81,7 +82,16 @@ Panel {
     if (reasonCode === "HBR-SYSTEM-POLICY-RESET") return "Requested policy reset."
     if (reasonCode === "HBR-SYSTEM-POLICY-WRITE-FAILED") return "Request failed. No policy change was confirmed."
     if (reasonCode === "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE") return "The request could not be verified."
-    return "No request has been made."
+    return "The system policy request could not be completed."
+  }
+  function systemPolicyActionMessage(receiptText) {
+    try {
+      var receipt = JSON.parse(String(receiptText || ""))
+      if (!receipt || typeof receipt.reasonCode !== "string") throw new Error("malformed receipt")
+      return systemPolicyMutationMessage(receipt.reasonCode)
+    } catch (error) {
+      return "Could not read the system policy request result."
+    }
   }
   function saveDraft() {
     if (!service) return
@@ -132,8 +142,7 @@ Panel {
     ask("apply", "Test authentication cancellation leaves requested policy unchanged.")
     confirmAction()
     var authenticationCancellation = false
-    try { authenticationCancellation = JSON.parse(actionResult).reasonCode === "HBR-SYSTEM-POLICY-AUTH-CANCELLED" }
-    catch (error) { authenticationCancellation = false }
+    authenticationCancellation = actionResult === "Cancelled. No system policy was changed."
     service.setSystemPolicyFixture('{"authorization":"authorized"}')
     return JSON.stringify({ accepted: true, forward: forward, reverse: reverse,
       confirmationOpened: confirmationOpened, cancellationClosed: confirmationKind === "",
@@ -156,8 +165,8 @@ Panel {
     confirmationKind = ""
     if (!service) return
     if (kind === "manual") actionResult = service.requestStagedSleep()
-    else if (kind === "apply") actionResult = service.applySystemPolicy()
-    else if (kind === "reset-system") actionResult = service.resetSystemPolicy()
+    else if (kind === "apply") actionResult = systemPolicyActionMessage(service.applySystemPolicy())
+    else if (kind === "reset-system") actionResult = systemPolicyActionMessage(service.resetSystemPolicy())
     else if (kind === "reset-policy") actionResult = service.resetUserPolicy()
     else if (kind === "reset-history") actionResult = service.resetHistory()
     else if (kind === "diagnostics") copyDiagnosticsToClipboard()
