@@ -418,12 +418,13 @@ Panel {
           textFormat: Text.PlainText
           text: root.statusSnapshot ? "Requested: " + root.policyText(root.statusSnapshot.requestedSystemPolicy)
             + "\nEffective: " + root.policyText(root.statusSnapshot.effectiveSystemPolicy)
-            + "\nProvenance: " + (root.statusSnapshot.systemPolicyProvenance || []).join(", ") : "Status unavailable."
+            + "\nProvenance: " + (root.statusSnapshot.systemPolicyProvenance || []).join(", ")
+            + "\nLatest system policy request result: " + (root.statusSnapshot.lastSystemPolicyMutationResult || "none") : "Status unavailable."
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
-          Accessible.name: "Requested and effective system policy"
+          Accessible.name: "Requested and effective system policy and latest request result"
         }
         PanelSeparator { width: parent.width }
         PanelSectionHeader { text: "Manual action" }
