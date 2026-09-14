@@ -51,13 +51,20 @@ Earlier per-ticket implementation branches are preserved as historical evidence.
 This is an explicit workflow exception; issue closure still waits for reviewed
 merge, and release gates remain separate.
 
-## Verification in progress
+## Verification completed
 
-The focused default hosted journey passed before the final native-probe wiring;
-the full matrix and final-tree verification are still in progress. Scoped native
-probe, lifecycle, static, generated-metadata and Rust checks have passed during
-implementation. These intermediate checks are not a final candidate pass.
-Independent standards/spec reviews must finish before integration closeout.
+Frozen implementation: `fb5523990f7f1c6cb8ee69d424d54c0e84e167d6`.
+All ordinary candidate gates pass, including 29 Rust process/package tests.
+The optimized production build passes. The complete Quickshell matrix ran from
+an immutable Git archive of this commit and exited successfully: 17 scenarios,
+including one 2,000-transition soak exercising real persistence with simulated
+sleep. Focused regressions cover strict external revision conflicts, duplicate
+and unknown keys, menu confirmation, and native update handoff.
+
+Hosted package versions: Omarchy 4.0.3-1, Quickshell 0.3.1-1, systemd 261.2-1.
+This is hosted integration evidence. Clean-room and attended hardware
+qualification remain required. Independent Standards and Spec review has no
+remaining blocking findings; see [review-integration.md](review-integration.md).
 
 ShellCheck 0.11.0 was obtained from its official upstream release and verified
 against the published asset SHA-256:
@@ -71,3 +78,5 @@ No real sleep, host-policy change, package installation, signed-source release,
 or hardware qualification is claimed by this record. Clean-room native,
 privileged authorization/lifecycle, accessibility and attended hardware evidence
 remain required for a newly frozen candidate after integration.
+
+Hosted log SHA-256: `32bfce150d2160b8c94b1dd1de1ce53177ea88facf00ca457060f6ac634bbb38`.

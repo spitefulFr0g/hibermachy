@@ -42,7 +42,9 @@ otherwise the native operation lifecycle can drop completion delivery.
 
 ## Validation boundary
 
-The ordinary candidate gates pass, including 29 Rust tests. Focused hosted
-journeys have passed during correction. Full-matrix evidence must name the final
-source snapshot before integration is closed. No real sleep, authenticated host
+The ordinary candidate gates pass, including 29 Rust tests. The full hosted
+matrix passes all 17 scenarios, including the 2,000-transition persistence soak,
+on frozen implementation `fb5523990f7f1c6cb8ee69d424d54c0e84e167d6`.
+The update handoff and corrected external-revision handling received targeted
+independent review; no blocking findings remain. No real sleep, authenticated host
 mutation, release signature or clean-room qualification is established here.
