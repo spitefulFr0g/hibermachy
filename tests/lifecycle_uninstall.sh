@@ -7,7 +7,7 @@ trap 'rm -rf "$root"' EXIT
 
 seed() {
   rm -f "$root/lifecycle-events" "$root/lifecycle-state.json" "$root/interrupt" "$root/native-plugin-add" "$root/recovered-plugin-manifest.json" "$root/helper-build"
-  rm -rf "$root/plugin" "$root/helper" "$root/user" "$root/etc" "$root/menu.jsonc" "$root/menu.json"
+  rm -rf "${root:?}/plugin" "${root:?}/helper" "${root:?}/user" "${root:?}/etc" "${root:?}/menu.jsonc" "${root:?}/menu.json"
   mkdir -p "$root/plugin" "$root/helper" "$root/user" "$root/etc/systemd/sleep.conf.d"
   printf '%s\n' '{"schemaVersion":1,"id":"dev.hibermachy","version":"0.1.0","protocol":{"min":1,"max":1},"kinds":["service","panel"]}' > "$root/plugin/manifest.json"
   printf '%s\n' 'owner=alice' > "$root/installation-owner"
@@ -61,7 +61,10 @@ node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.polic
 [[ $(grep -v '^menu-' "$root/lifecycle-events" | paste -sd, -) == 'disable,policy-reset-authenticated,policy-reset-verified-absent,package-removal-requested,package-removed,checkout-removed' ]]
 grep -q 'Preserve this comment' "$root/menu.jsonc"
 grep -q 'unrelated' "$root/menu.jsonc"
-! grep -q 'hibermachy' "$root/menu.jsonc"
+if grep -q 'hibermachy' "$root/menu.jsonc"; then
+  printf '%s\n' 'HBR-CHK-LIFECYCLE-009 FAILED: managed menu entries remain after uninstall' >&2
+  exit 1
+fi
 rerun=$("$(cd "$(dirname "$0")/.." && pwd)/lifecycle/uninstall" --root "$root")
 node -e 'const x=JSON.parse(process.argv[1]); if (x.kind!=="accepted" || x.policyReset!=="verified-absent" || x.menu!=="unchanged") process.exit(1)' "$rerun"
 

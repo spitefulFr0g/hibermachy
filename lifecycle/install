@@ -430,7 +430,9 @@ function update() {
     phase("completed");
     fs.unlinkSync(path.join(root, "update-intent.json"));
   }
-  return { kind: "accepted", operation: "update", activation: priorActivation, priorActivation, policyMutation: false, inventory: inventory() };
+  return { kind: "accepted", operation: "update", activation: priorActivation, priorActivation,
+    automaticAcceptance: false, helper: "upgraded", menu: "reconciled", probes: "rerun",
+    policyMutation: false, inventory: inventory() };
 }
 
 if (!root || !fs.existsSync(root)) fail("HBR-LIFECYCLE-ROOT-REQUIRED");

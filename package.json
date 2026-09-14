@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:quattro-hosted && npm run test:lifecycle && npm run test:lifecycle-install && npm run test:lifecycle-uninstall && npm run test:lifecycle-recovery && npm run test:packaging && npm run test:traceability && npm run test:cross-seam",
+    "test": "npm run test:quattro-hosted && npm run test:lifecycle && npm run test:lifecycle-install && npm run test:lifecycle-update && npm run test:lifecycle-remove && npm run test:lifecycle-uninstall && npm run test:lifecycle-recovery && npm run test:packaging && npm run test:traceability && npm run test:cross-seam && npm run test:native-probes",
     "test:quattro-hosted": "tests/quattro-hosted-plugin.sh",
     "test:lifecycle": "tests/lifecycle_status.sh",
     "test:lifecycle-install": "tests/lifecycle_install.sh",
@@ -13,6 +13,9 @@
     "test:traceability": "tests/traceability_merge_gate.sh",
     "test:cross-seam": "tests/cross_seam_merge_gate.sh",
     "test:static": "tests/static_merge_gate.sh",
-    "test:candidate": "tests/candidate_merge_gate.sh"
+    "test:candidate": "tests/candidate_merge_gate.sh",
+    "test:lifecycle-update": "tests/lifecycle_update.sh",
+    "test:lifecycle-remove": "tests/lifecycle_remove.sh",
+    "test:native-probes": "tests/native_probes.sh"
   }
 }

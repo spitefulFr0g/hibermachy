@@ -2,6 +2,7 @@ pkgname=hibermachy-helper
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='Authenticated one-shot helper for Hibermachy requested system policy'
+url='https://github.com/spitefulFr0g/hibermachy'
 arch=('x86_64')
 license=('MIT')
 depends=('glibc' 'polkit')
@@ -13,8 +14,8 @@ install=hibermachy-helper.install
 # Keeping the sentinels here prevents an unsigned or unverifiable package from
 # being accidentally published without inventing a project signing identity.
 source=(
-  "hibermachy-helper-${pkgver}.tar.gz::https://github.com/hibermachy/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz"
-  "hibermachy-helper-${pkgver}.tar.gz.sig::https://github.com/hibermachy/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz.sig"
+  "hibermachy-helper-${pkgver}.tar.gz::https://github.com/spitefulFr0g/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz"
+  "hibermachy-helper-${pkgver}.tar.gz.sig::https://github.com/spitefulFr0g/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz.sig"
 )
 sha512sums=('__RELEASE_SHA512__' '__RELEASE_SIGNATURE_SHA512__')
 validpgpkeys=('__RELEASE_SIGNING_KEY__')

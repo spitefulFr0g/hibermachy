@@ -11,8 +11,11 @@ Item {
   readonly property bool testMode: Quickshell.env("HBR_TEST_MODE") === "1"
   readonly property string stateDirectory: String((testMode && Quickshell.env("HIBERMACHY_STATE_DIR")) || Quickshell.env("HOME") + "/.local/state/hibermachy")
   readonly property string historyPath: stateDirectory + "/outcomes.json"
+  readonly property string historyArchivePath: stateDirectory + "/outcomes.rejected.json"
+  readonly property string journalPath: stateDirectory + "/diagnostics.jsonl"
   readonly property string latchPath: stateDirectory + "/rearm-latch.json"
-  readonly property string bootId: String((testMode && Quickshell.env("HIBERMACHY_SIM_BOOT_ID")) || "simulated-boot")
+  property string bootId: testMode ? String(Quickshell.env("HIBERMACHY_SIM_BOOT_ID") || "simulated-boot") : ""
+  property var historyAwaitingBoot: null
   readonly property string serviceGeneration: "service-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)
   readonly property int entryEvidenceWindowMs: Math.max(30000, Number((testMode && Quickshell.env("HIBERMACHY_SIM_INHIBITOR_DELAY_MS")) || 0) + 10000)
   readonly property int postResumeEvidenceWindowMs: 30000
@@ -27,6 +30,12 @@ Item {
   property bool automaticEvaluationInProgress: false
   property bool historyLoaded: false
   property bool historyHealthy: true
+  property bool historyReplacementBlocked: false
+  property string rejectedHistoryText: ""
+  property bool journalHealthy: true
+  property int journalSequence: 0
+  readonly property var retryScheduleMs: [100, 250, 1000]
+  property int historyRetryAttempt: 0
   property int nextAttemptNumber: 1
   property int nextEventNumber: 1
   property int simulatedSleepSubmissionCount: 0
@@ -58,12 +67,15 @@ Item {
   readonly property string helperPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_PATH")) || "/usr/libexec/hibermachy-policy-helper"
   readonly property string helperLauncherPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_LAUNCHER")) || "/usr/bin/pkexec"
   readonly property string effectivePolicyReaderPath: (testMode && Quickshell.env("HBR_EFFECTIVE_POLICY_READER")) || "/usr/bin/systemd-analyze"
-  readonly property string contractProbePath: (testMode && Quickshell.env("HBR_CONTRACT_PROBE")) || "/usr/bin/omarchy-contract-probe"
+  readonly property string contractProbePath: (testMode && Quickshell.env("HBR_CONTRACT_PROBE")) || decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-contract-probe")).replace(/^file:\/\//, ""))
+  readonly property string capabilityProbePath: decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-sleep-capability-probe")).replace(/^file:\/\//, ""))
   property bool contractProbeComplete: false
   property var contractSnapshot: null
 
   readonly property var statusSnapshot: ({
     pluginActivation: "active",
+    schemaVersion: 1,
+    envelopeVersion: 1,
     automaticPolicyEnablement: policyAccepted && policySnapshot && policySnapshot.automaticPolicyEnabled ? "enabled" : "disabled",
     automaticStagedSleepReadiness: automaticReadiness(),
     manualStagedSleepReadiness: manualReadiness(lastObservation),
@@ -100,11 +112,14 @@ Item {
     rearmRequired: rearmRequired,
     historyLoaded: historyLoaded,
     historyHealth: historyHealthy ? "healthy" : "degraded",
+    historyReplacementBlocked: historyReplacementBlocked,
     openAttempt: historyDocument.openAttempt,
     outcomeHistory: historyDocument.terminalOutcomes.slice(-20),
     outcomeHistoryCount: historyDocument.terminalOutcomes.length,
     suppressionSummaries: historyDocument.suppressionSummaries,
     notificationFingerprints: historyDocument.notificationFingerprints,
+    notifications: historyDocument.notifications,
+    journalHealth: journalHealthy ? "healthy" : "degraded",
     simulatedSleepSubmissionCount: simulatedSleepSubmissionCount,
     lastSubmission: lastSubmission
     ,userPolicy: policySnapshot
@@ -117,7 +132,8 @@ Item {
   })
 
   function emptyHistory(): var {
-    return { schemaVersion: 1, openAttempt: null, terminalOutcomes: [], suppressionSummaries: [], notificationFingerprints: [] }
+    return { schemaVersion: 1, envelopeVersion: 1, openAttempt: null, terminalOutcomes: [],
+      suppressionSummaries: [], notificationFingerprints: [], notifications: [] }
   }
 
   function contractReasonCode(operation): string {
@@ -144,6 +160,103 @@ Item {
     if (contractReadiness("diagnostics") !== "ready") return contractReasonCode("diagnostics")
     if (!historyLoaded) return "HBR-DIAGNOSTICS-HISTORY-PENDING"
     return historyHealthy ? "HBR-DIAGNOSTICS-READY" : "HBR-DIAGNOSTICS-DEGRADED"
+  }
+
+  function knownReasonCode(reasonCode): bool {
+    var code = String(reasonCode || "")
+    return [
+      "HBR-SLEEP-TRANSACTION-RETURNED", "HBR-SLEEP-UNIT-FAILED", "HBR-SLEEP-LOCK-FAILED",
+      "HBR-SLEEP-SUSPEND-FALLBACK", "HBR-SLEEP-EVIDENCE-MISSING", "HBR-SLEEP-EVIDENCE-CONTRADICTORY",
+      "HBR-SLEEP-EARLY-WAKE", "HBR-SLEEP-ENQUEUE-PENDING", "HBR-SLEEP-ACCEPTED", "HBR-SLEEP-AUTOMATIC-SUPPRESSED",
+      "HBR-SLEEP-BOOT-CHANGED", "HBR-SLEEP-SERVICE-RECREATED", "HBR-SLEEP-OBSERVATION-FAILED",
+      "HBR-SLEEP-SYSTEM-INHIBITED", "HBR-SLEEP-NOT-EXECUTABLE", "HBR-SLEEP-BUSY",
+      "HBR-AUTOMATIC-DISABLED", "HBR-AUTOMATIC-READY", "HBR-IDLE-MONITOR-UNAVAILABLE",
+      "HBR-COMPOSITOR-IDLE-INHIBITED", "HBR-STAY-AWAKE-ENABLED", "HBR-FRESH-ACTIVITY-REQUIRED",
+      "HBR-HISTORY-REARM-PERSISTENCE-FAILED", "HBR-HISTORY-ATTEMPT-PERSISTENCE-FAILED",
+      "HBR-HISTORY-ACTIVE-ATTEMPT", "HBR-HISTORY-RESET", "HBR-HISTORY-PERSISTENCE",
+      "HBR-HISTORY-ARCHIVE-FAILED", "HBR-DIAGNOSTICS-READY", "HBR-DIAGNOSTICS-DEGRADED",
+      "HBR-DIAGNOSTICS-HISTORY-PENDING", "HBR-POLICY-PERSISTENCE", "HBR-POLICY-SAVED",
+      "HBR-POLICY-RESET", "HBR-POLICY-UNAVAILABLE", "HBR-SYSTEM-POLICY-APPLIED",
+      "HBR-SYSTEM-POLICY-DIFFERS", "HBR-SYSTEM-POLICY-RESET", "HBR-SYSTEM-POLICY-SUBMITTED",
+      "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE", "HBR-SYSTEM-POLICY-READBACK-CONTRADICTORY",
+      "HBR-CONTRACT-READY", "HBR-CONTRACT-PREFLIGHT-PENDING", "HBR-CONTRACT-PREFLIGHT-FAILED",
+      "HBR-CONTRACT-INCOMPATIBLE-AUTOMATIC", "HBR-CONTRACT-INCOMPATIBLE-MANUAL",
+      "HBR-CONTRACT-INCOMPATIBLE-DIAGNOSTICS", "HBR-CONTRACT-INCOMPATIBLE-SYSTEM-POLICY", "HBR-MANUAL-READY"
+    ].indexOf(code) >= 0
+  }
+
+  function safeHumanCopy(outcome, reasonCode): string {
+    if (!knownReasonCode(reasonCode)) return "The service recorded an additional diagnostic outcome."
+    if (outcome === "Suppressed") return "Automatic staged sleep was suppressed."
+    if (outcome === "Refused") return "The sleep request was refused safely."
+    if (outcome === "Degraded") return "The request completed using a safe fallback."
+    if (outcome === "Failed") return "The sleep request failed before completion was established."
+    if (outcome === "Indeterminate") return "The result could not be determined without replaying the request."
+    if (outcome === "Completed") return "The observable sleep transaction returned; hibernation is not confirmed."
+    return "The service recorded a diagnostic outcome."
+  }
+
+  function safeReasonIdentity(reasonCode): string {
+    var code = String(reasonCode || "")
+    return knownReasonCode(code) ? code : "HBR-DIAGNOSTICS-UNKNOWN-REASON"
+  }
+
+  function sanitizedProvenance(values): var {
+    return (values || []).map(function(value) {
+      var text = String(value || "")
+      if (text === "/etc/systemd/sleep.conf.d/90-hibermachy.conf") return "hibermachy-owned-policy"
+      if (text.indexOf("/etc/systemd/") === 0) return "administrator-system-policy"
+      return "other-policy-source"
+    })
+  }
+
+  function safeEnum(value, allowed, fallback): string {
+    var text = String(value || "")
+    return allowed.indexOf(text) >= 0 ? text : fallback
+  }
+
+  function sanitizedOutcome(value): var {
+    value = value && typeof value === "object" ? value : ({})
+    return { schemaVersion: 1, envelopeVersion: 1, operation: "staged-sleep",
+      phase: safeEnum(value.phase, ["eligibility-evaluation", "request-enqueue", "outcome-reconciliation"], "unknown"),
+      outcome: safeEnum(value.outcome, ["Suppressed", "Refused", "Degraded", "Failed", "Indeterminate", "Completed"], "unknown"),
+      reasonCode: safeReasonIdentity(value.reasonCode),
+      evidenceLevel: safeEnum(value.evidenceLevel, ["typed-eligibility", "typed-capability", "typed-transaction-return", "typed-unit-result", "typed-lock-result", "missing-typed-evidence", "contradictory-typed-evidence", "recovered-after-boot", "recovered-after-service-recreation", "none"], "none"),
+      requestedMode: "suspend-then-hibernate",
+      selectedMode: safeEnum(value.selectedMode, ["suspend-then-hibernate", "suspend", "none"], "none"),
+      hibernationConfirmed: value.details && value.details.hibernationConfirmed === true }
+  }
+
+  function copyDiagnostics(): string {
+    var outcomes = (historyDocument.terminalOutcomes || []).slice(-20).map(sanitizedOutcome)
+    var value = { schemaVersion: 1, envelopeVersion: 1, format: "hibermachy-diagnostics-v1",
+      componentVersions: { service: "1", protocol: "1", plugin: "1" },
+      readiness: { automatic: automaticReadiness(), manual: manualReadiness(lastObservation),
+        systemPolicy: statusSnapshot.systemPolicyReadiness, diagnostics: diagnosticsReadiness() },
+      policy: policySnapshot ? { automaticPolicyEnabled: policySnapshot.automaticPolicyEnabled,
+        idleDelaySeconds: policySnapshot.idleDelaySeconds, revision: policySnapshot.revision } : null,
+      systemPolicy: { requested: requestedSystemPolicy ? { hibernateDelaySeconds: requestedSystemPolicy.hibernateDelaySeconds,
+          hibernateOnAcPower: requestedSystemPolicy.hibernateOnAcPower } : null,
+        effective: effectiveSystemPolicy ? { hibernateDelaySeconds: effectiveSystemPolicy.hibernateDelaySeconds,
+          hibernateOnAcPower: effectiveSystemPolicy.hibernateOnAcPower } : null,
+        provenance: sanitizedProvenance(systemPolicyProvenance) },
+      capabilities: lastObservation ? { stagedSleepExecutable: !!lastObservation.stagedSleepExecutable,
+        suspendExecutable: !!lastObservation.suspendExecutable, hibernateExecutable: !!lastObservation.hibernateExecutable,
+        systemSleepInhibited: !!lastObservation.systemSleepInhibited, observationFailed: !!lastObservation.observationFailed } : null,
+      history: { health: historyHealthy ? "healthy" : "degraded", replacementBlocked: historyReplacementBlocked,
+        outcomeCount: outcomes.length, outcomes: outcomes },
+      journal: { health: journalHealthy ? "healthy" : "degraded" },
+      notifications: (historyDocument.notifications || []).slice(-20).map(function(item) {
+        item = item && typeof item === "object" ? item : ({})
+        var outcome = safeEnum(item.outcome, ["Suppressed", "Refused", "Degraded", "Failed", "Indeterminate", "Completed"], "unknown")
+        var reasonCode = safeReasonIdentity(item.reasonCode)
+        return { outcome: outcome, reasonCode: reasonCode, humanCopy: safeHumanCopy(outcome, reasonCode) }
+      }) }
+    return JSON.stringify(value, null, 2) + "\n"
+  }
+
+  function retryDelayMs(attempt): int {
+    return retryScheduleMs[Math.min(Math.max(0, attempt), retryScheduleMs.length - 1)]
   }
 
   function suspendFallbackAvailable(): bool {
@@ -385,7 +498,8 @@ Item {
   }
 
   function result(kind, reasonCode, details): string {
-    return JSON.stringify(Object.assign({ kind: kind, reasonCode: reasonCode }, details || {}))
+    return JSON.stringify(Object.assign({ schemaVersion: 1, envelopeVersion: 1,
+      kind: kind, reasonCode: reasonCode }, details || {}))
   }
 
   function setClockFixture(fixtureJson): string {
@@ -411,14 +525,15 @@ Item {
     var duplicateAttempt = false
     for (var index = 0; index < count; index += 1) {
       var receipt = JSON.parse(requestStagedSleep())
-      if (receipt.accepted) {
+      if (receipt.kind === "accepted") {
         accepted += 1
         if (attemptIds[receipt.attemptId]) duplicateAttempt = true
         attemptIds[receipt.attemptId] = true
       } else refused += 1
       maxHistory = Math.max(maxHistory, (historyDocument.terminalOutcomes || []).length)
       maxNotifications = Math.max(maxNotifications, (historyDocument.notifications || []).length)
-      maxDiagnosticsBytes = Math.max(maxDiagnosticsBytes, copyDiagnostics().length)
+      if (index === 0 || index % 100 === 99 || index === count - 1)
+        maxDiagnosticsBytes = Math.max(maxDiagnosticsBytes, copyDiagnostics().length)
       if (testClockMs !== null) testClockMs += 1
     }
     var finalStatus = JSON.parse(status())
@@ -444,28 +559,62 @@ Item {
   }
 
   function clone(value): var { return JSON.parse(JSON.stringify(value)) }
-  function clockNowMs(): int { return testClockMs === null ? Date.now() : testClockMs }
+  function clockNowMs(): var { return testClockMs === null ? Date.now() : testClockMs }
   function nowWallTime(): string { return new Date(clockNowMs()).toISOString() }
 
   function eventEnvelope(attemptId, origin, selectedMode, phase, outcome, reasonCode, evidenceLevel, details): var {
     var eventId = "event-" + nextEventNumber++
     return {
-      schemaVersion: 1, eventId: eventId, correlationId: attemptId || eventId, attemptId: attemptId,
+      schemaVersion: 1, envelopeVersion: 1, eventId: eventId, correlationId: attemptId || eventId, attemptId: attemptId,
       wallTime: nowWallTime(), monotonicTimeMs: clockNowMs(), bootId: bootId,
       serviceGeneration: serviceGeneration, origin: origin, operation: "staged-sleep", phase: phase,
-      outcome: outcome, reasonCode: reasonCode, requestedMode: "suspend-then-hibernate",
+      outcome: outcome, reasonCode: safeReasonIdentity(reasonCode), requestedMode: "suspend-then-hibernate",
       selectedMode: selectedMode || "none", evidenceLevel: evidenceLevel, details: details || {}
     }
+  }
+
+  function validOutcomeEntry(value): bool {
+    return value && typeof value === "object" && typeof value.wallTime === "string"
+      && typeof value.phase === "string" && typeof value.outcome === "string"
+      && typeof value.reasonCode === "string" && typeof value.evidenceLevel === "string"
+      && typeof value.requestedMode === "string" && typeof value.selectedMode === "string"
+      && value.details && typeof value.details === "object"
+  }
+
+  function validNotification(value): bool {
+    return value && typeof value === "object" && typeof value.outcome === "string"
+      && typeof value.reasonCode === "string" && typeof value.humanCopy === "string"
   }
 
   function validHistory(value): bool {
     return value && value.schemaVersion === 1 && Array.isArray(value.terminalOutcomes)
       && Array.isArray(value.suppressionSummaries) && Array.isArray(value.notificationFingerprints)
+      && value.terminalOutcomes.every(validOutcomeEntry)
+      && (value.notifications === undefined || (Array.isArray(value.notifications) && value.notifications.every(validNotification)))
       && (value.openAttempt === null || typeof value.openAttempt === "object")
+  }
+
+  function loadBootIdentity(raw): void {
+    if (testMode) return
+    var identity = String(raw || "").trim().toLowerCase()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(identity)) {
+      historyHealthy = false
+      return
+    }
+    bootId = identity
+    if (historyAwaitingBoot !== null) {
+      var pending = historyAwaitingBoot
+      historyAwaitingBoot = null
+      loadHistory(pending)
+    }
   }
 
   function loadHistory(raw): void {
     if (historyLoaded) return
+    if (!bootId) {
+      historyAwaitingBoot = String(raw || "")
+      return
+    }
     if (simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)) {
       historyHealthy = false
       historyLoaded = true
@@ -475,9 +624,13 @@ Item {
       try {
         var parsed = JSON.parse(raw)
         if (!validHistory(parsed)) throw new Error("unsupported history schema")
+        parsed.envelopeVersion = parsed.envelopeVersion || 1
+        parsed.notifications = parsed.notifications || []
         historyDocument = parsed
       } catch (error) {
         historyHealthy = false
+        historyReplacementBlocked = true
+        rejectedHistoryText = String(raw)
         historyLoaded = true
         return
       }
@@ -500,6 +653,7 @@ Item {
   }
 
   function persistHistory(allowOpenAttemptDuringDiagnosticFault): bool {
+    if (!bootId || historyAwaitingBoot !== null || historyReplacementBlocked) return false
     if (allowOpenAttemptDuringDiagnosticFault && simulatedBoolean("HIBERMACHY_SIM_OPEN_ATTEMPT_FAILURE", false)) return false
     var diagnosticFault = simulatedBoolean("HIBERMACHY_SIM_HISTORY_FAILURE", false)
     if (diagnosticFault) historyHealthy = false
@@ -538,17 +692,52 @@ Item {
 
   function appendTerminal(envelope): void {
     var next = clone(historyDocument)
+    next.notifications = next.notifications || []
     next.openAttempt = null
     next.terminalOutcomes.push(envelope)
     next.terminalOutcomes = trimHistory(next.terminalOutcomes)
     next.suppressionSummaries = next.suppressionSummaries.slice(-32)
-    if (envelope.outcome === "Failed" || envelope.outcome === "Indeterminate" || envelope.outcome === "Degraded") {
+    if (envelope.outcome === "Completed") {
+      next.notificationFingerprints = []
+      next.notifications = []
+    } else if (envelope.outcome === "Failed" || envelope.outcome === "Indeterminate" || envelope.outcome === "Degraded") {
       var fingerprint = envelope.outcome + ":" + envelope.reasonCode
-      if (next.notificationFingerprints.indexOf(fingerprint) < 0) next.notificationFingerprints.push(fingerprint)
+      var shouldNotify = envelope.outcome === "Degraded" || envelope.origin === "automatic"
+      if (shouldNotify && next.notificationFingerprints.indexOf(fingerprint) < 0) {
+        next.notificationFingerprints.push(fingerprint)
+        var notification = { schemaVersion: 1, envelopeVersion: 1, outcome: envelope.outcome,
+          reasonCode: envelope.reasonCode, humanCopy: safeHumanCopy(envelope.outcome, envelope.reasonCode) }
+        next.notifications.push(notification)
+        sendNotification(notification)
+      }
     }
     next.notificationFingerprints = next.notificationFingerprints.slice(-64)
+    next.notifications = next.notifications.slice(-20)
     historyDocument = next
+    appendJournal(envelope)
     persistHistory()
+  }
+
+  function appendJournal(envelope): void {
+    journalSequence += 1
+    if (testMode && simulatedBoolean("HIBERMACHY_SIM_JOURNAL_FAILURE", false)) {
+      journalHealthy = false
+      return
+    }
+    if (testMode) {
+      journalHealthy = true
+      return
+    }
+    var entry = sanitizedOutcome(envelope)
+    entry.sequence = journalSequence
+    journalHealthy = true
+    journalFile.setText(JSON.stringify(entry) + "\n")
+  }
+
+  function sendNotification(notification): void {
+    if (testMode) return
+    notificationProcess.command = ["/usr/share/omarchy/bin/omarchy-notification-send", "Hibermachy", notification.humanCopy]
+    notificationProcess.running = true
   }
 
   function reconcileRecoveredAttempt(): void {
@@ -562,8 +751,9 @@ Item {
   }
 
   function recordSimulatedSuppression(): void {
-    var reason = String(Quickshell.env("HIBERMACHY_SIM_SUPPRESSION_REASON") || "")
-    if (!reason) return
+    var rawReason = testMode ? Quickshell.env("HIBERMACHY_SIM_SUPPRESSION_REASON") : ""
+    var reason = safeReasonIdentity(rawReason || "")
+    if (reason === "HBR-DIAGNOSTICS-UNKNOWN-REASON" && !rawReason) return
     var next = clone(historyDocument)
     var summaries = next.suppressionSummaries
     var last = summaries.length ? summaries[summaries.length - 1] : null
@@ -575,17 +765,18 @@ Item {
       "Suppressed", reason, "typed-eligibility", {}))
   }
 
-  function recordPreSubmissionOutcome(kind, reasonCode): string {
-    appendTerminal(eventEnvelope(null, "manual", "none", "eligibility-evaluation",
+  function recordPreSubmissionOutcome(origin, kind, reasonCode): string {
+    appendTerminal(eventEnvelope(null, origin, "none", "eligibility-evaluation",
       kind === "failed" ? "Failed" : "Refused", reasonCode, "typed-capability", {}))
     executionInProgress = false
     return result(kind, reasonCode, {})
   }
 
   function evidenceResult(selectionPath): var {
-    var scenario = String(Quickshell.env("HIBERMACHY_SIM_EVIDENCE") || "completed")
+    var scenario = String((testMode && Quickshell.env("HIBERMACHY_SIM_EVIDENCE")) || "completed")
     if (selectionPath === "suspend-fallback") return { outcome: "Degraded", reason: "HBR-SLEEP-SUSPEND-FALLBACK", evidence: "typed-transaction-return" }
     if (scenario === "unit-failure") return { outcome: "Failed", reason: "HBR-SLEEP-UNIT-FAILED", evidence: "typed-unit-result" }
+    if (scenario === "lock-failure") return { outcome: "Failed", reason: "HBR-SLEEP-LOCK-FAILED", evidence: "typed-lock-result" }
     if (scenario === "early-wake") return { outcome: "Completed", reason: "HBR-SLEEP-EARLY-WAKE", evidence: "typed-transaction-return" }
     if (scenario === "missing") return { outcome: "Indeterminate", reason: "HBR-SLEEP-EVIDENCE-MISSING", evidence: "missing-typed-evidence" }
     if (scenario === "contradictory") return { outcome: "Indeterminate", reason: "HBR-SLEEP-EVIDENCE-CONTRADICTORY", evidence: "contradictory-typed-evidence" }
@@ -594,7 +785,7 @@ Item {
   }
 
   function policyReceipt(accepted, reasonCode, extra): string {
-    var value = { accepted: accepted, reasonCode: reasonCode,
+    var value = { schemaVersion: 1, envelopeVersion: 1, accepted: accepted, reasonCode: reasonCode,
       requestedSystemPolicy: requestedSystemPolicy, effectiveSystemPolicy: effectiveSystemPolicy,
       systemPolicyProvenance: systemPolicyProvenance }
     if (extra) for (var key in extra) value[key] = extra[key]
@@ -698,7 +889,13 @@ Item {
 
   function resetHistory(): string {
     if (executionInProgress || historyDocument.openAttempt) {
-      return JSON.stringify({ accepted: false, reasonCode: "HBR-HISTORY-ACTIVE-ATTEMPT" })
+      return result("refused", "HBR-HISTORY-ACTIVE-ATTEMPT", { accepted: false })
+    }
+    if (historyReplacementBlocked) {
+      historyArchiveFile.setText(rejectedHistoryText)
+      if (!historyArchiveFile.waitForJob()) return result("failed", "HBR-HISTORY-ARCHIVE-FAILED", { accepted: false })
+      historyReplacementBlocked = false
+      rejectedHistoryText = ""
     }
     historyDocument = emptyHistory()
     rearmRequired = true
@@ -707,8 +904,8 @@ Item {
     historyLoaded = true
     nextAttemptNumber = 1
     nextEventNumber = 1
-    if (!persistHistory(false)) return JSON.stringify({ accepted: false, reasonCode: "HBR-HISTORY-PERSISTENCE" })
-    return JSON.stringify({ accepted: true, reasonCode: "HBR-HISTORY-RESET" })
+    if (!persistHistory(false)) return result("failed", "HBR-HISTORY-PERSISTENCE", { accepted: false })
+    return result("accepted", "HBR-HISTORY-RESET", { accepted: true })
   }
 
   function editSystemPolicyDraft(delaySeconds, onAcPower): string {
@@ -805,14 +1002,15 @@ Item {
 
   function _coordinateStagedSleep(origin): string {
     if (executionInProgress) return result("refused", "HBR-SLEEP-BUSY", {})
+    if (!bootId) return result("failed", "HBR-DIAGNOSTICS-HISTORY-PENDING", { operation: "staged-sleep" })
     if (contractReadiness(origin === "manual" ? "manual" : "automatic") !== "ready")
       return result("failed", contractReasonCode(origin === "manual" ? "manual" : "automatic"), { operation: "staged-sleep" })
     if (origin === "automatic" && automaticReadiness() !== "ready") return result("refused", "HBR-SLEEP-AUTOMATIC-SUPPRESSED", {})
     executionInProgress = true
     var observation = observeSleepExecutability()
     lastObservation = observation
-    if (observation.observationFailed) return recordPreSubmissionOutcome("failed", "HBR-SLEEP-OBSERVATION-FAILED")
-    if (observation.systemSleepInhibited) return recordPreSubmissionOutcome("refused", "HBR-SLEEP-SYSTEM-INHIBITED")
+    if (observation.observationFailed) return recordPreSubmissionOutcome(origin, "failed", "HBR-SLEEP-OBSERVATION-FAILED")
+    if (observation.systemSleepInhibited) return recordPreSubmissionOutcome(origin, "refused", "HBR-SLEEP-SYSTEM-INHIBITED")
 
     var selectedMode = ""
     var selectionPath = ""
@@ -822,7 +1020,7 @@ Item {
     } else if (observation.suspendExecutable) {
       selectedMode = "suspend"
       selectionPath = "suspend-fallback"
-    } else return recordPreSubmissionOutcome("refused", "HBR-SLEEP-NOT-EXECUTABLE")
+    } else return recordPreSubmissionOutcome(origin, "refused", "HBR-SLEEP-NOT-EXECUTABLE")
 
     if (!persistLatch()) {
       executionInProgress = false
@@ -892,7 +1090,7 @@ Item {
 
   Process {
     id: sleepCapabilityProbe
-    command: ["/usr/bin/loginctl", "show-logind", "-p", "CanSuspend", "-p", "CanHibernate", "-p", "CanSuspendThenHibernate", "-p", "BlockInhibited"]
+    command: [root.capabilityProbePath]
     stdout: StdioCollector { id: sleepCapabilityStdout; waitForEnd: true }
     onExited: function(exitCode) {
       var values = {}
@@ -1004,6 +1202,10 @@ Item {
   }
 
   Process {
+    id: notificationProcess
+  }
+
+  Process {
     id: effectivePolicyProcess
     command: [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
     stdout: StdioCollector { id: effectivePolicyStdout; waitForEnd: true }
@@ -1097,12 +1299,49 @@ Item {
   }
 
   FileView {
+    id: bootIdentityFile
+    path: root.testMode ? "" : "/proc/sys/kernel/random/boot_id"
+    printErrors: false
+    onLoaded: root.loadBootIdentity(text())
+    onLoadFailed: { if (!root.testMode) root.historyHealthy = false }
+  }
+
+  FileView {
     id: historyFile
     path: root.historyPath
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadHistory(text())
     onLoadFailed: root.loadHistory("")
+  }
+
+  Timer {
+    id: historyRetryTimer
+    interval: root.retryDelayMs(root.historyRetryAttempt)
+    repeat: true
+    running: root.historyLoaded && !root.historyHealthy && !root.historyReplacementBlocked
+      && root.historyRetryAttempt < root.retryScheduleMs.length
+    onTriggered: {
+      root.historyRetryAttempt += 1
+      if (root.persistHistory(false)) {
+        root.historyHealthy = true
+        root.historyRetryAttempt = 0
+      }
+    }
+  }
+
+  FileView {
+    id: historyArchiveFile
+    path: root.historyArchivePath
+    atomicWrites: true
+    printErrors: false
+  }
+
+  FileView {
+    id: journalFile
+    path: root.journalPath
+    atomicWrites: true
+    printErrors: false
   }
 
 
@@ -1118,7 +1357,10 @@ Item {
   Component.onCompleted: {
     if (root.testMode) idleMonitorHealthy = true
     contractProbe.running = true
-    if (!root.testMode) sleepCapabilityProbe.running = true
+    if (!root.testMode) {
+      bootIdentityFile.reload()
+      sleepCapabilityProbe.running = true
+    }
     if (!root.testMode) initialPolicyProbe.running = true
     policyFile.reload()
     historyFile.reload()
@@ -1135,6 +1377,7 @@ Item {
     function saveUserPolicy(requestJson: string): string { return root.saveUserPolicy(requestJson) }
     function resetUserPolicy(): string { return root.resetUserPolicy() }
     function resetHistory(): string { return root.resetHistory() }
+    function copyDiagnostics(): string { return root.copyDiagnostics() }
     function requestStagedSleep(): string { return root.requestStagedSleep() }
     function editSystemPolicyDraft(delaySeconds: int, onAcPower: bool): string { return root.editSystemPolicyDraft(delaySeconds, onAcPower) }
     function reviewSystemPolicy(): string { return root.reviewSystemPolicy() }

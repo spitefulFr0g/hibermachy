@@ -2,11 +2,19 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+shell_files=(
+  "$root"/tests/*.sh
+  "$root"/lifecycle/status
+  "$root"/lifecycle/uninstall
+  "$root"/packaging/hibermachy-helper.install
+)
 
 printf '%s\n' 'HBR-CHK-STATIC-001 JSON, shell, and whitespace validation'
 node -e 'for (const file of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(file))' \
   "$root/package.json" "$root/plugin/manifest.json"
-bash -n "$root"/tests/*.sh "$root"/lifecycle/* "$root"/packaging/hibermachy-helper.install
+for file in "${shell_files[@]}"; do
+  bash -n "$file"
+done
 if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/packaging" "$root/tests" "$root/verification"; then
   printf '%s\n' 'HBR-CHK-STATIC-001 FAILED: trailing whitespace' >&2
   exit 1
@@ -18,7 +26,11 @@ for file in "$root/lifecycle/install" "$root/lifecycle/remove"; do
 done
 
 printf '%s\n' 'HBR-CHK-STATIC-005 production process paths are absolute and test overrides are gated'
-rg -q 'command: \["/usr/bin/loginctl"' "$root/plugin/Service.qml"
+rg -q 'command: \[root.capabilityProbePath\]' "$root/plugin/Service.qml"
+rg -Fq 'Qt.resolvedUrl("bin/hibermachy-sleep-capability-probe")' "$root/plugin/Service.qml"
+node --check "$root/plugin/bin/native-probe-lib.cjs"
+node --check "$root/plugin/bin/hibermachy-contract-probe"
+node --check "$root/plugin/bin/hibermachy-sleep-capability-probe"
 rg -q 'command: \["/usr/bin/omarchy-toggle-idle"' "$root/plugin/Service.qml"
 rg -q 'sleepRequestProcess.command = \["/usr/bin/systemctl"' "$root/plugin/Service.qml"
 rg -q 'helperPath: \(testMode && Quickshell.env\("HBR_POLICY_HELPER_PATH"\)' "$root/plugin/Service.qml"
@@ -26,19 +38,33 @@ rg -q 'helperLauncherPath: \(testMode && Quickshell.env\("HBR_POLICY_HELPER_LAUN
 rg -q 'effectivePolicyReaderPath: \(testMode && Quickshell.env\("HBR_EFFECTIVE_POLICY_READER"\)' "$root/plugin/Service.qml"
 rg -q 'contractProbePath: \(testMode && Quickshell.env\("HBR_CONTRACT_PROBE"\)' "$root/plugin/Service.qml"
 rg -q 'configHome: \(testMode && Quickshell.env\("XDG_CONFIG_HOME"\)' "$root/plugin/Service.qml"
-! rg -n 'command: \["(systemctl|loginctl|omarchy-toggle-idle)"' "$root/plugin/Service.qml"
-! rg -n 'command: \["/bin/sh"' "$root/plugin/Service.qml"
+if rg -n 'command: \["(systemctl|loginctl|omarchy-toggle-idle)"' "$root/plugin/Service.qml"; then
+  printf '%s\n' 'HBR-CHK-STATIC-005 FAILED: production process path is not absolute' >&2
+  exit 1
+fi
+if rg -n 'command: \["/bin/sh"' "$root/plugin/Service.qml"; then
+  printf '%s\n' 'HBR-CHK-STATIC-005 FAILED: shell process launch is prohibited' >&2
+  exit 1
+fi
 
 if command -v shellcheck >/dev/null 2>&1; then
   printf '%s\n' 'HBR-CHK-STATIC-003 shellcheck'
-  shellcheck "$root"/tests/*.sh "$root"/lifecycle/* "$root"/packaging/hibermachy-helper.install
+  shellcheck --shell=bash "${shell_files[@]}"
 else
   printf '%s\n' 'HBR-ENV-LIMIT shellcheck not installed'
 fi
 
+qmlformat_path=
 if command -v qmlformat >/dev/null 2>&1; then
-  printf '%s\n' 'HBR-CHK-STATIC-004 qmlformat'
-  qmlformat --check "$root"/plugin/*.qml
+  qmlformat_path=$(command -v qmlformat)
+elif [[ -x /usr/lib/qt6/bin/qmlformat ]]; then
+  qmlformat_path=/usr/lib/qt6/bin/qmlformat
+fi
+if [[ -n "$qmlformat_path" ]]; then
+  printf '%s\n' 'HBR-CHK-STATIC-004 qmlformat QML parse validation (not a formatting check)'
+  for file in "$root"/plugin/*.qml; do
+    "$qmlformat_path" "$file" >/dev/null
+  done
 else
-  printf '%s\n' 'HBR-ENV-LIMIT qmlformat not installed; hosted QML gate remains required'
+  printf '%s\n' 'HBR-ENV-LIMIT qmlformat not installed; QML parse validation unavailable'
 fi

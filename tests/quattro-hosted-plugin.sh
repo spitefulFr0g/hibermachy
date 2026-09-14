@@ -12,6 +12,9 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=missing HIBERMACHY_EXPECTED_KIND=accepted "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SUPPRESSION_REASON=HBR-IDLE-STAY-AWAKE "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_JOURNAL_FAILURE=1 "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_CORRUPT_HISTORY=1 "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_PRIVATE_HISTORY=1 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HBR_TEST_THEME=high-contrast HBR_TEST_SCALE=1.5 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SEED_OPEN_BOOT=prior-boot "$0"
   exit 0
@@ -66,6 +69,12 @@ fi
 printf '[font]\nbase-size=12\n[spacing]\nscale=%s\n' "${HBR_TEST_SCALE:-1}" > "$test_root/.local/state/omarchy/current/theme/shell.toml"
 if [[ -n "${HIBERMACHY_SEED_OPEN_BOOT:-}" ]]; then
   node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({schemaVersion:1,openAttempt:{attemptId:"prior-attempt",origin:"manual",selectedMode:"suspend-then-hibernate",bootId:process.argv[2]},terminalOutcomes:[],suppressionSummaries:[],notificationFingerprints:[]})+"\n")' "$test_root/.local/state/hibermachy/outcomes.json" "$HIBERMACHY_SEED_OPEN_BOOT"
+fi
+if [[ "${HIBERMACHY_SEED_CORRUPT_HISTORY:-}" == 1 ]]; then
+  printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[null],"suppressionSummaries":[],"notificationFingerprints":[],"private":"must remain archived"}' > "$test_root/.local/state/hibermachy/outcomes.json"
+fi
+if [[ "${HIBERMACHY_SEED_PRIVATE_HISTORY:-}" == 1 ]]; then
+  printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[{"phase":"private-phase-/home/alice","outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","evidenceLevel":"private-evidence","requestedMode":"private-request","selectedMode":"private-selected","details":{"private":"alice@example.test"}}],"suppressionSummaries":[],"notificationFingerprints":[],"notifications":[{"outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","humanCopy":"alice@example.test"}]}' > "$test_root/.local/state/hibermachy/outcomes.json"
 fi
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
@@ -250,6 +259,55 @@ node -e '
   if (!s.sleepExecutability || typeof s.sleepExecutability.observationFailed !== "boolean") process.exit(1);
   if (s.automaticStagedSleepReadiness !== "not-ready" || s.manualStagedSleepReadiness !== process.argv[2]) process.exit(1);
 ' "$status" "$expected_manual"
+printf '%s\n' 'HBR-CHK-DIAGNOSTICS-002 deterministic diagnostics export is available and redacted'
+diagnostics=$(call "$plugin_id" copyDiagnostics)
+node -e '
+  const d = JSON.parse(process.argv[1]);
+  if (d.schemaVersion !== 1 || d.envelopeVersion !== 1 || d.format !== "hibermachy-diagnostics-v1") process.exit(1);
+  if (!d.componentVersions || !d.readiness || !d.capabilities || !d.history) process.exit(1);
+  if (d.history.outcomes.length > 20 || d.history.outcomeCount > 20) process.exit(1);
+  if (JSON.stringify(d).match(/\/home\/|username|rawConfiguration|inhibitorText|environment|journalText/)) process.exit(1);
+' "$diagnostics"
+if [[ "${HIBERMACHY_SEED_PRIVATE_HISTORY:-}" == 1 ]]; then
+  printf '%s\n' 'HBR-CHK-DIAGNOSTICS-006 malformed retained fields are allowlisted and cannot leak through export'
+  node -e '
+    const d = JSON.parse(process.argv[1]);
+    const text = JSON.stringify(d);
+    if (text.includes("alice") || text.includes("PRIVATE-ALICE") || text.includes("private-phase")) process.exit(1);
+    const outcome = d.history.outcomes[0];
+    if (outcome.phase !== "unknown" || outcome.outcome !== "unknown" || outcome.reasonCode !== "HBR-DIAGNOSTICS-UNKNOWN-REASON" || outcome.evidenceLevel !== "none" || outcome.selectedMode !== "none") process.exit(1);
+    if (d.notifications[0].humanCopy !== "The service recorded an additional diagnostic outcome.") process.exit(1);
+  ' "$diagnostics"
+fi
+printf '%s\n' 'HBR-CHK-DIAGNOSTICS-005 panel copies the sanitized export through its test-mode process seam'
+call dev.hibermachy.panel-test startDiagnosticsCopy >/dev/null
+diagnostics_copy_state=''
+for _ in $(seq 1 100); do
+  diagnostics_copy_state=$(call dev.hibermachy.panel-test diagnosticsCopyState)
+  if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.pending ? 1 : 0)' "$diagnostics_copy_state"; then break; fi
+  sleep 0.1
+done
+node -e '
+  const state = JSON.parse(process.argv[1]);
+  if (state.pending || state.result !== "Diagnostics copy verified (test).") process.exit(1);
+  const copied = JSON.parse(state.copiedText);
+  if (copied.format !== "hibermachy-diagnostics-v1") process.exit(1);
+' "$diagnostics_copy_state"
+if [[ "${HIBERMACHY_SEED_CORRUPT_HISTORY:-}" == 1 ]]; then
+  printf '%s\n' 'HBR-CHK-DIAGNOSTICS-003 rejected history survives until explicit reset and is archived'
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.historyHealth!=="degraded"||!s.diagnosticsReadiness)process.exit(1)' "$status"
+  receipt=$(call "$plugin_id" resetHistory)
+  node -e 'const r=JSON.parse(process.argv[1]); if(!r.accepted||r.reasonCode!=="HBR-HISTORY-RESET")process.exit(1)' "$receipt"
+  grep -q 'must remain archived' "$test_root/.local/state/hibermachy/outcomes.rejected.json"
+fi
+if [[ "${HIBERMACHY_SIM_JOURNAL_FAILURE:-}" == 1 ]]; then
+  printf '%s\n' 'HBR-CHK-DIAGNOSTICS-004 journal failure is advisory and cannot change the receipt'
+  receipt=$(call "$plugin_id" requestStagedSleep)
+  node -e 'const r=JSON.parse(process.argv[1]); if(r.kind!=="accepted"||r.reasonCode!=="HBR-SLEEP-ACCEPTED")process.exit(1)' "$receipt"
+  status=$(status_json)
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.journalHealth!=="degraded")process.exit(1)' "$status"
+  exit 0
+fi
 printf '%s\n' 'HBR-CHK-SYSTEM-001 system policy starts as an independent unpersisted draft'
 assert_system_policy_draft "$status"
 
@@ -314,6 +372,7 @@ second=$(call "$plugin_id" applySystemPolicy)
 node -e 'const r=JSON.parse(process.argv[1]); if (r.reasonCode!=="HBR-SYSTEM-POLICY-BUSY") process.exit(1)' "$second"
 call "$plugin_id" setSystemPolicyFixture '{"authorization":"authorized","helper":"accepted"}' >/dev/null
 first=$(call "$plugin_id" applySystemPolicy)
+node -e 'const r=JSON.parse(process.argv[1]); if (!r.accepted || r.reasonCode!=="HBR-SYSTEM-POLICY-SUBMITTED") process.exit(1)' "$first"
 for _ in $(seq 1 50); do
   status=$(status_json)
   if node -e 'const s=JSON.parse(process.argv[1]); if (s.systemPolicyReasonCode!=="HBR-SYSTEM-POLICY-APPLIED") process.exit(1)' "$status"; then break; fi
@@ -490,14 +549,17 @@ status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==2 || !s.rearmRequired) process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-SOAK-001 controlled clock and accelerated transitions stay bounded'
-call "$plugin_id" setClockFixture '{"nowMs":1893456000000}' | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if(!r.accepted||r.reasonCode!=="HBR-TEST-CLOCK-SET")process.exit(1)'
+call "$plugin_id" setClockFixture '{"nowMs":1893456000000}' | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if(r.kind!=="accepted"||r.reasonCode!=="HBR-TEST-CLOCK-SET")process.exit(1)'
 soak=$(call "$plugin_id" runAcceleratedSoak 2000)
 node -e '
   const r=JSON.parse(process.argv[1]);
   if (!r.accepted || r.reasonCode !== "HBR-TEST-SOAK-COMPLETE" || r.transitions !== 2000
     || r.acceptedTransitions !== 2000 || r.refusedTransitions !== 0 || r.duplicateAttempt
-    || r.busyAtEnd || r.historyCount > 20 || r.maxNotifications > 20 || r.maxDiagnosticsBytes > 20000
-    || r.finalRearmRequired !== true || r.finalStatus.manual !== "ready") process.exit(1);
+    || r.busyAtEnd || r.historyCount > 256 || r.maxHistory > 256 || r.maxNotifications > 20 || r.maxDiagnosticsBytes > 20000
+    || r.finalRearmRequired !== true || r.finalStatus.manual !== "ready") {
+    console.error(JSON.stringify(r));
+    process.exit(1);
+  }
 ' "$soak"
 fi
 

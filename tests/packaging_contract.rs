@@ -24,6 +24,26 @@ fn package_manifest_is_source_verified_and_does_not_invent_release_identity() {
 }
 
 #[test]
+fn package_metadata_uses_the_canonical_repository_and_valid_srcinfo_indentation() {
+    let package = packaging_file("PKGBUILD");
+    let srcinfo = packaging_file(".SRCINFO");
+    let repository = "https://github.com/spitefulFr0g/hibermachy";
+
+    assert!(package.contains(&format!("url='{repository}'")));
+    assert!(package.contains(&format!("{repository}/releases/download/v${{pkgver}}/")));
+    assert!(srcinfo.contains(&format!("\turl = {repository}")));
+    assert!(srcinfo.contains(&format!(
+        "\tsource = hibermachy-helper-0.1.0.tar.gz::{repository}/releases/download/v0.1.0/"
+    )));
+    assert!(!package.contains("github.com/hibermachy/hibermachy"));
+    assert!(!srcinfo.contains("github.com/hibermachy/hibermachy"));
+    assert!(!srcinfo.contains("\\t"));
+    assert!(srcinfo.lines().skip(1).all(|line| {
+        line.starts_with('\t') || line.starts_with("pkgname = ") || line.is_empty()
+    }));
+}
+
+#[test]
 fn package_installs_only_root_owned_helper_and_polkit_declaration() {
     let package = packaging_file("PKGBUILD");
 

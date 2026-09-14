@@ -23,6 +23,11 @@ Panel {
   property string confirmationKind: ""
   property string confirmationMessage: ""
   property string actionResult: ""
+  readonly property bool testMode: Quickshell.env("HBR_TEST_MODE") === "1"
+  property bool clipboardPending: false
+  property bool clipboardTimedOut: false
+  property string clipboardPayload: ""
+  property string testCopiedDiagnostics: ""
   property Item focusBeforeConfirmation: null
   property int focusBeforeIndex: -1
   property int lastRestoredFocusIndex: -1
@@ -137,10 +142,54 @@ Panel {
     else if (kind === "reset-system") actionResult = service.resetSystemPolicy()
     else if (kind === "reset-policy") actionResult = service.resetUserPolicy()
     else if (kind === "reset-history") actionResult = service.resetHistory()
+    else if (kind === "diagnostics") copyDiagnosticsToClipboard()
     if (kind === "reset-policy") draftDirty = false
     if (kind === "reset-system") systemDraftDirty = false
     restoreFocus()
   }
+  function copyDiagnosticsToClipboard() {
+    if (!service || clipboardPending || clipboardProcess.running) return
+    clipboardPayload = service.copyDiagnostics()
+    testCopiedDiagnostics = ""
+    clipboardTimedOut = false
+    clipboardPending = true
+    actionResult = "Copying diagnostics…"
+    clipboardProcess.stdinEnabled = true
+    clipboardProcess.running = true
+  }
+
+  Process {
+    id: clipboardProcess
+    command: root.testMode ? ["/usr/bin/cat"] : ["/usr/bin/wl-copy", "--type", "text/plain;charset=utf-8"]
+    stdout: StdioCollector { id: clipboardOutput; waitForEnd: true }
+    onStarted: {
+      write(root.clipboardPayload)
+      root.clipboardPayload = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode, exitStatus) {
+      root.clipboardPending = false
+      root.clipboardPayload = ""
+      if (exitCode === 0 && exitStatus === 0 && !root.clipboardTimedOut) {
+        if (root.testMode) root.testCopiedDiagnostics = clipboardOutput.text
+        root.actionResult = root.testMode ? "Diagnostics copy verified (test)." : "Diagnostics copied."
+      } else root.actionResult = "Could not copy diagnostics."
+    }
+  }
+
+  Timer {
+    interval: 10000
+    running: root.clipboardPending
+    onTriggered: {
+      root.clipboardTimedOut = true
+      root.clipboardPayload = ""
+      root.actionResult = "Could not copy diagnostics."
+      // Keep retries disabled until a started process has actually exited.
+      if (clipboardProcess.running) clipboardProcess.running = false
+      else root.clipboardPending = false
+    }
+  }
+
   function moveConfirmationSelection(delta) {
     if (confirmationKind !== "") confirmation.moveSelection(delta)
   }
@@ -414,6 +463,16 @@ Panel {
           Accessible.name: "Reset retained outcome history"
           Accessible.description: enabled ? "Enabled" : "Disabled"
         }
+        Button {
+          id: diagnosticsButton
+          text: "Copy sanitized diagnostics"
+          bordered: true
+          focusable: true
+          enabled: root.statusSnapshot && root.statusSnapshot.diagnosticsReadiness !== "not-ready" && !root.clipboardPending && !clipboardProcess.running
+          onClicked: root.ask("diagnostics", "Copy sanitized diagnostics to the clipboard. No data is transmitted.")
+          Accessible.name: "Copy sanitized diagnostics"
+          Accessible.description: enabled ? "Enabled; excludes private data and unrestricted logs" : "Disabled"
+        }
       }
     }
 
@@ -446,7 +505,7 @@ Panel {
   Component.onCompleted: {
     focusTargets = [automaticToggle, idleFive, idleThirty, idleHour, idleNumber.field, saveButton,
       hibernateFifteen, hibernateHour, hibernateTwoHours, hibernateNumber.field, acToggle,
-      applyButton, resetSystemButton, manualButton, resetPolicyButton, resetHistoryButton]
+      applyButton, resetSystemButton, manualButton, resetPolicyButton, resetHistoryButton, diagnosticsButton]
     refresh()
   }
 
@@ -454,5 +513,10 @@ Panel {
     enabled: Quickshell.env("HBR_TEST_MODE") === "1"
     target: "dev.hibermachy.panel-test"
     function accessibilityJourney(): string { return root.accessibilityJourney() }
+    function startDiagnosticsCopy(): void { root.copyDiagnosticsToClipboard() }
+    function diagnosticsCopyState(): string {
+      return JSON.stringify({ pending: root.clipboardPending, result: root.actionResult,
+        copiedText: root.testCopiedDiagnostics })
+    }
   }
 }

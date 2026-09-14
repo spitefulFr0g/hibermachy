@@ -20,21 +20,42 @@ function fail(reasonCode) {
 function regular(file) { try { return fs.lstatSync(path.join(root, file)).isFile(); } catch { return false; } }
 function record(phase) { fs.writeFileSync(path.join(root, "lifecycle-state.json"), `${JSON.stringify({ schemaVersion: 1, operation: command === "disable" ? "disable" : "plugin-removal", phase })}\n`); }
 function fixtureAccepted(file, required) { return regular(file) && required.every((entry) => fs.readFileSync(path.join(root, file), "utf8").includes(entry)); }
+function warnings(document) {
+  const result = [
+    "This operation changes plugin lifecycle only; it is not Hibermachy uninstall.",
+    "Checkout, menu contribution, user configuration/state, helper package, and requested system policy are inventoried independently."
+  ];
+  if (document.scopes?.requested_system_policy?.state === "compatible")
+    result.push("Machine-wide requested system policy remains effective; reset it through the separate authenticated policy workflow.");
+  return result;
+}
 function result(operation) {
-  return { kind: "accepted", operation, activation: "disabled", unloadedKinds: ["service", "panel"], nativeDelegation: "quattro", policyMutation: false, inventory: inventory() };
+  const currentInventory = inventory();
+  return { kind: "accepted", operation, activation: "disabled", unloadedKinds: ["service", "panel"], nativeDelegation: "quattro", policyMutation: false, inventory: currentInventory, warnings: warnings(currentInventory) };
+}
+function decline(operation) {
+  const currentInventory = inventory();
+  process.stderr.write(`${JSON.stringify({
+    kind: "declined", operation,
+    activation: currentInventory.scopes?.activation?.enabled === true ? "enabled" : "disabled",
+    nativeDelegation: "quattro", policyMutation: false,
+    inventory: currentInventory, warnings: warnings(currentInventory)
+  })}\n`);
+  process.exitCode = 1;
 }
 function run() {
   if (!root || !fs.existsSync(root)) return fail("HBR-LIFECYCLE-ROOT-REQUIRED");
   if (!["disable", "remove"].includes(command)) return fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
   record("started");
-  if (!fixtureAccepted("quattro-disable", ["accepted=true", "confirmation=explicit"])) return fail("HBR-NATIVE-DISABLE-REQUIRED");
+  if (!fixtureAccepted("quattro-disable", ["accepted=true", "confirmation=explicit"])) return decline(command === "disable" ? "disable" : "plugin-removal");
   fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":false}\n');
   record("disabled");
   if (command === "disable") { process.stdout.write(`${JSON.stringify(result("disable"))}\n`); return; }
-  if (!fixtureAccepted("quattro-remove", ["accepted=true", "confirmation=explicit", "disabled=true"])) return fail("HBR-NATIVE-REMOVE-REQUIRED");
+  if (!fixtureAccepted("quattro-remove", ["accepted=true", "confirmation=explicit", "disabled=true"])) return decline("plugin-removal");
   if (fixtureAccepted("quattro-remove", ["partial=true"])) {
     record("native-removal-partial");
-    process.stderr.write(`${JSON.stringify({ kind: "partial", operation: "plugin-removal", activation: "disabled", nativeDelegation: "quattro", policyMutation: false, inventory: inventory(), reasonCode: "HBR-NATIVE-REMOVE-INCOMPLETE" })}\n`);
+    const currentInventory = inventory();
+    process.stderr.write(`${JSON.stringify({ kind: "partial", operation: "plugin-removal", activation: "disabled", nativeDelegation: "quattro", policyMutation: false, inventory: currentInventory, warnings: warnings(currentInventory).concat("Native plugin removal was incomplete; rerun after resolving the native boundary."), reasonCode: "HBR-NATIVE-REMOVE-INCOMPLETE" })}\n`);
     process.exitCode = 1;
     return;
   }
