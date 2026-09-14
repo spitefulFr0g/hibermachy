@@ -28,7 +28,7 @@ function response(stdout, status = 0) { return { status, stdout, stderr: "" }; }
 function run(command, args) {
   const tail = args.join(" ");
   if (command === probe.QUICKSHELL && tail.endsWith("shell ping")) return response("ok\n");
-  if (command === probe.QUICKSHELL && tail.endsWith("shell listPlugins")) return response(JSON.stringify([{ id: "dev.hibermachy", enabled: true, active: true }]));
+  if (command === probe.QUICKSHELL && tail.endsWith("shell listPlugins")) return response(JSON.stringify([{ id: "dev.hibermachy", kinds: ["service", "panel"], enabled: true, active: false }]));
   if (command === probe.HELPER) return response("release=0.1.0 protocol-min=1 protocol-max=1\n");
   if (command === probe.PACMAN && args.join(" ") === "-Q omarchy") return response("omarchy 4.0.3-1\n");
   if (command === probe.BUSCTL && args.includes("CanSuspend")) return response('{"type":"s","data":["yes"]}');
@@ -44,6 +44,17 @@ assert.equal(contract.compatible, true);
 assert.equal(contract.majorVersion, 4);
 assert.equal(contract.omarchyVersion, "4.0.3-1");
 for (const key of probe.REQUIRED_CONTRACTS) assert.equal(contract[key], true, key);
+
+// Native Quattro reports active=false for enabled services. Disabled and
+// missing service entries must still fail the activation contract.
+for (const entries of [[], [{ id: "dev.hibermachy", kinds: ["service", "panel"], enabled: false, active: false }], [{ id: "dev.hibermachy", kinds: ["bar"], enabled: true, active: true }]]) {
+  const result = probe.evaluateContract({ ...adapter, run(command, args) {
+    return command === probe.QUICKSHELL && args.join(" ").endsWith("shell listPlugins")
+      ? response(JSON.stringify(entries)) : run(command, args);
+  } });
+  assert.equal(result.pluginActivation, false);
+  assert.equal(result.compatible, false);
+}
 
 const missingHelper = probe.evaluateContract({ ...adapter, run(command, args) {
   return command === probe.HELPER ? response("", 1) : run(command, args);

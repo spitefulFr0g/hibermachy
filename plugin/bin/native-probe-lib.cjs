@@ -117,7 +117,10 @@ function evaluateContract(adapter) {
   const observations = {
     shellReady: text(ping) === "ok",
     pluginDiscovery: includesAll(registry, ["scan_thirdparty", "manifest.json", "registry.pluginsDir"]),
-    pluginActivation: !!ownPlugin && ownPlugin.enabled === true && ownPlugin.active === true,
+    // Quattro listPlugins.active describes the selected bar, not services.
+    pluginActivation: !!ownPlugin && ownPlugin.enabled === true
+      && Array.isArray(ownPlugin.kinds) && ownPlugin.kinds.includes("service")
+      && ownPlugin.kinds.includes("panel"),
     manifestSchema: validManifest(manifest, pluginRoot, read),
     ipcFeatures: includesAll(registry, ["function setEnabled", "function rescan", "installedPlugins"]),
     qmlFeatures: includesAll(service, ["import Quickshell.Io", "import Quickshell.Wayland", "IpcHandler", "Process"]),

@@ -63,6 +63,7 @@ Item {
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
   property string systemPolicyMutation: ""
+  property string lastSystemPolicyMutationResult: ""
   property var systemPolicyFixture: ({ authorization: testMode ? "authorized" : "unavailable" })
   readonly property string helperPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_PATH")) || "/usr/libexec/hibermachy-policy-helper"
   readonly property string helperLauncherPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_LAUNCHER")) || "/usr/bin/pkexec"
@@ -132,6 +133,7 @@ Item {
     ,effectiveSystemPolicy: effectiveSystemPolicy
     ,systemPolicyProvenance: systemPolicyProvenance
     ,systemPolicyReasonCode: systemPolicyReasonCode
+    ,lastSystemPolicyMutationResult: lastSystemPolicyMutationResult
     ,systemPolicyReadiness: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready"
   })
 
@@ -1024,9 +1026,12 @@ Item {
     if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (!validSystemPolicy(systemPolicyDraft)) return policyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
-    var fixture = systemPolicyFixture || {}
+    var fixture = testMode ? (systemPolicyFixture || {}) : {}
     if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
-    if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
+    if (fixture.authorization === "cancelled") {
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-AUTH-CANCELLED"
+      return policyReceipt(false, lastSystemPolicyMutationResult)
+    }
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
     if (fixture.helper && fixture.helper !== "accepted") return policyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
@@ -1037,6 +1042,7 @@ Item {
     if (!testMode) {
       systemPolicyBusy = true
       systemPolicyMutation = "apply"
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-SUBMITTED"
       helperProcess.command = [helperLauncherPath, helperPath, "apply", String(requested.hibernateDelaySeconds), requested.hibernateOnAcPower ? "yes" : "no"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED", { pair: requested })
@@ -1044,6 +1050,7 @@ Item {
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
       systemPolicyMutation = "apply"
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-SUBMITTED"
       helperProcess.command = [helperLauncherPath, helperPath, "apply", String(requested.hibernateDelaySeconds), requested.hibernateOnAcPower ? "yes" : "no"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED", { pair: requested })
@@ -1057,6 +1064,7 @@ Item {
     systemPolicyProvenance = fixture.provenance || []
     systemPolicyReasonCode = systemPolicyMatches(effectiveSystemPolicy, requested)
       ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    lastSystemPolicyMutationResult = systemPolicyReasonCode
     requireFreshActivity()
     return policyReceipt(true, systemPolicyReasonCode, { pair: requested })
   }
@@ -1067,6 +1075,7 @@ Item {
     if (!testMode) {
       systemPolicyBusy = true
       systemPolicyMutation = "reset"
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-SUBMITTED"
       helperProcess.command = [helperLauncherPath, helperPath, "reset"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED")
@@ -1074,12 +1083,16 @@ Item {
     var fixture = systemPolicyFixture || {}
     if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
-    if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
+    if (fixture.authorization === "cancelled") {
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-AUTH-CANCELLED"
+      return policyReceipt(false, lastSystemPolicyMutationResult)
+    }
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
     if (fixture.helper && fixture.helper !== "accepted") return policyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
       systemPolicyMutation = "reset"
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-SUBMITTED"
       helperProcess.command = [helperLauncherPath, helperPath, "reset"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED")
@@ -1088,6 +1101,7 @@ Item {
     effectiveSystemPolicy = null
     systemPolicyProvenance = []
     systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET"
+    lastSystemPolicyMutationResult = systemPolicyReasonCode
     return policyReceipt(true, "HBR-SYSTEM-POLICY-RESET")
   }
 
@@ -1288,11 +1302,14 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0) {
         root.systemPolicyBusy = false
-        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-WRITE-FAILED"
+        root.lastSystemPolicyMutationResult = exitCode === 126 ? "HBR-SYSTEM-POLICY-AUTH-CANCELLED"
+          : exitCode === 127 ? "HBR-SYSTEM-POLICY-UNAVAILABLE" : "HBR-SYSTEM-POLICY-WRITE-FAILED"
+        root.systemPolicyMutation = ""
         return
       }
       if (!root.testMode) {
         root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-PENDING"
+        root.lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-READBACK-PENDING"
         effectivePolicyProcess.running = true
         return
       }
@@ -1303,6 +1320,7 @@ Item {
       root.systemPolicyReasonCode = root.requestedSystemPolicy
         ? (root.systemPolicyMatches(root.effectiveSystemPolicy, root.requestedSystemPolicy) ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS")
         : "HBR-SYSTEM-POLICY-RESET"
+      root.lastSystemPolicyMutationResult = root.systemPolicyReasonCode
       if (root.requestedSystemPolicy) root.requireFreshActivity()
       root.systemPolicyMutation = ""
       root.systemPolicyBusy = false
@@ -1350,6 +1368,7 @@ Item {
     stdout: StdioCollector { id: effectivePolicyStdout; waitForEnd: true }
     onExited: function(exitCode) {
       root.loadSystemPolicyReadback(effectivePolicyStdout.text, exitCode)
+      root.lastSystemPolicyMutationResult = root.systemPolicyReasonCode
       root.systemPolicyMutation = ""
       root.systemPolicyBusy = false
     }
