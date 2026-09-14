@@ -24,6 +24,7 @@ function qmlBody(marker, offset = 0) {
   return source.slice(open + 1, close);
 }
 const apply = new Function("context", `with (context) { ${qmlBody("function applySystemPolicy(): string {")} }`);
+const reset = new Function("context", `with (context) { ${qmlBody("function resetSystemPolicy(): string {")} }`);
 const helperStart = source.indexOf("id: helperProcess");
 assert.notEqual(helperStart, -1, "helper process must remain available");
 const helperExited = new Function("root", "exitCode", qmlBody("onExited: function(exitCode) {", helperStart));
@@ -33,6 +34,7 @@ function context(testMode) {
     testMode,
     systemPolicyFixture: { authorization: "unavailable" },
     systemPolicyBusy: false,
+    lastSystemPolicyMutationResult: "",
     systemPolicyDraft: { hibernateDelaySeconds: 7200, hibernateOnAcPower: false, scope: "machine-wide" },
     helperLauncherPath: "/fixture/authenticator",
     helperPath: "/fixture/policy-helper",
@@ -59,6 +61,23 @@ const fixture = context(true);
 assert.deepEqual(apply(fixture), { accepted: false, reasonCode: "HBR-SYSTEM-POLICY-UNAVAILABLE" });
 assert.equal(fixture.helperProcess.running, false);
 assert.deepEqual(fixture.helperProcess.command, []);
+assert.equal(fixture.lastSystemPolicyMutationResult, "");
+
+const resetFixture = context(true);
+resetFixture.systemPolicyFixture = { authorization: "cancelled" };
+resetFixture.requestedSystemPolicy = { hibernateDelaySeconds: 7200, hibernateOnAcPower: false };
+resetFixture.effectiveSystemPolicy = { hibernateDelaySeconds: 7200, hibernateOnAcPower: false };
+const beforeReset = JSON.stringify([resetFixture.requestedSystemPolicy, resetFixture.effectiveSystemPolicy]);
+assert.deepEqual(reset(resetFixture), { accepted: false, reasonCode: "HBR-SYSTEM-POLICY-AUTH-CANCELLED" });
+assert.equal(resetFixture.lastSystemPolicyMutationResult, "HBR-SYSTEM-POLICY-AUTH-CANCELLED");
+assert.equal(JSON.stringify([resetFixture.requestedSystemPolicy, resetFixture.effectiveSystemPolicy]), beforeReset);
+
+const resetSuccess = context(true);
+resetSuccess.systemPolicyFixture = {};
+resetSuccess.requestedSystemPolicy = { hibernateDelaySeconds: 7200, hibernateOnAcPower: false };
+resetSuccess.effectiveSystemPolicy = { hibernateDelaySeconds: 7200, hibernateOnAcPower: false };
+assert.deepEqual(reset(resetSuccess), { accepted: true, reasonCode: "HBR-SYSTEM-POLICY-RESET" });
+assert.equal(resetSuccess.lastSystemPolicyMutationResult, "HBR-SYSTEM-POLICY-RESET");
 
 function mutationContext() {
   return {
@@ -85,6 +104,8 @@ for (const [exitCode, expected] of [[126, "HBR-SYSTEM-POLICY-AUTH-CANCELLED"], [
 const panel = fs.readFileSync(path.join(root, "plugin/Panel.qml"), "utf8");
 assert.match(panel, /Latest system policy request result:/);
 assert.match(panel, /statusSnapshot\.lastSystemPolicyMutationResult/);
+assert.match(panel, /Cancelled\. No system policy was changed\./);
+assert.doesNotMatch(panel, /Latest system policy request result: " \+ \(root\.statusSnapshot\.lastSystemPolicyMutationResult/);
 NODE
 
 printf '%s\n' 'HBR-CHK-SYSTEM-POLICY-DISPATCH-001 production ignores fixtures, reports authentication cancellation, and preserves live policy readiness'

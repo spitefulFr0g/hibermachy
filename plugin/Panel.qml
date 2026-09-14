@@ -71,6 +71,18 @@ Panel {
     if (!policy) return "not set"
     return formatDuration(policy.hibernateDelaySeconds) + ", plugged in " + (policy.hibernateOnAcPower ? "yes" : "no")
   }
+  function systemPolicyMutationMessage(reasonCode) {
+    if (reasonCode === "HBR-SYSTEM-POLICY-AUTH-CANCELLED") return "Cancelled. No system policy was changed."
+    if (reasonCode === "HBR-SYSTEM-POLICY-UNAVAILABLE") return "Authentication is unavailable. No system policy was changed."
+    if (reasonCode === "HBR-SYSTEM-POLICY-SUBMITTED") return "Request submitted for authentication."
+    if (reasonCode === "HBR-SYSTEM-POLICY-READBACK-PENDING") return "Request accepted. Verifying the current policy."
+    if (reasonCode === "HBR-SYSTEM-POLICY-APPLIED") return "Policy applied."
+    if (reasonCode === "HBR-SYSTEM-POLICY-DIFFERS") return "Policy applied, but an administrator policy takes precedence."
+    if (reasonCode === "HBR-SYSTEM-POLICY-RESET") return "Requested policy reset."
+    if (reasonCode === "HBR-SYSTEM-POLICY-WRITE-FAILED") return "Request failed. No policy change was confirmed."
+    if (reasonCode === "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE") return "The request could not be verified."
+    return "No request has been made."
+  }
   function saveDraft() {
     if (!service) return
     var receipt = JSON.parse(service.saveUserPolicy(JSON.stringify({ baseRevision: draftBaseRevision,
@@ -419,7 +431,7 @@ Panel {
           text: root.statusSnapshot ? "Requested: " + root.policyText(root.statusSnapshot.requestedSystemPolicy)
             + "\nEffective: " + root.policyText(root.statusSnapshot.effectiveSystemPolicy)
             + "\nProvenance: " + (root.statusSnapshot.systemPolicyProvenance || []).join(", ")
-            + "\nLatest system policy request result: " + (root.statusSnapshot.lastSystemPolicyMutationResult || "none") : "Status unavailable."
+            + "\nLatest system policy request result: " + root.systemPolicyMutationMessage(root.statusSnapshot.lastSystemPolicyMutationResult) : "Status unavailable."
           color: Color.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall

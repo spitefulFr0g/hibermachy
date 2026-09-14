@@ -1064,6 +1064,7 @@ Item {
     systemPolicyProvenance = fixture.provenance || []
     systemPolicyReasonCode = systemPolicyMatches(effectiveSystemPolicy, requested)
       ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    lastSystemPolicyMutationResult = systemPolicyReasonCode
     requireFreshActivity()
     return policyReceipt(true, systemPolicyReasonCode, { pair: requested })
   }
@@ -1082,12 +1083,16 @@ Item {
     var fixture = systemPolicyFixture || {}
     if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "unavailable") return policyReceipt(false, "HBR-SYSTEM-POLICY-UNAVAILABLE")
-    if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
+    if (fixture.authorization === "cancelled") {
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-AUTH-CANCELLED"
+      return policyReceipt(false, lastSystemPolicyMutationResult)
+    }
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
     if (fixture.helper && fixture.helper !== "accepted") return policyReceipt(false, "HBR-SYSTEM-POLICY-HELPER-REJECTED")
     if (fixture.authorization === "authorized") {
       systemPolicyBusy = true
       systemPolicyMutation = "reset"
+      lastSystemPolicyMutationResult = "HBR-SYSTEM-POLICY-SUBMITTED"
       helperProcess.command = [helperLauncherPath, helperPath, "reset"]
       helperProcess.running = true
       return policyReceipt(true, "HBR-SYSTEM-POLICY-SUBMITTED")
@@ -1096,6 +1101,7 @@ Item {
     effectiveSystemPolicy = null
     systemPolicyProvenance = []
     systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET"
+    lastSystemPolicyMutationResult = systemPolicyReasonCode
     return policyReceipt(true, "HBR-SYSTEM-POLICY-RESET")
   }
 
