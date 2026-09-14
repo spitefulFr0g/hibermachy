@@ -1024,7 +1024,7 @@ Item {
     if (contractReadiness("system-policy") !== "ready") return policyReceipt(false, contractReasonCode("system-policy"))
     if (!validSystemPolicy(systemPolicyDraft)) return policyReceipt(false, "HBR-SYSTEM-POLICY-INVALID-DRAFT")
     if (systemPolicyBusy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
-    var fixture = systemPolicyFixture || {}
+    var fixture = testMode ? (systemPolicyFixture || {}) : {}
     if (fixture.busy) return policyReceipt(false, "HBR-SYSTEM-POLICY-BUSY")
     if (fixture.authorization === "cancelled") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-CANCELLED")
     if (fixture.authorization === "denied") return policyReceipt(false, "HBR-SYSTEM-POLICY-AUTH-DENIED")
