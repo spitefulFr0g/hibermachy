@@ -28,8 +28,8 @@ function context(testMode) {
     systemPolicyFixture: { authorization: "unavailable" },
     systemPolicyBusy: false,
     systemPolicyDraft: { hibernateDelaySeconds: 7200, hibernateOnAcPower: false, scope: "machine-wide" },
-    helperLauncherPath: "/usr/bin/pkexec",
-    helperPath: "/usr/libexec/hibermachy-policy-helper",
+    helperLauncherPath: "/fixture/authenticator",
+    helperPath: "/fixture/policy-helper",
     helperProcess: { command: [], running: false },
     contractReadiness: () => "ready",
     contractReasonCode: () => "HBR-CONTRACT-INCOMPATIBLE-SYSTEM-POLICY",
@@ -46,7 +46,7 @@ assert.deepEqual(apply(production), {
 });
 assert.equal(production.helperProcess.running, true);
 assert.deepEqual(production.helperProcess.command, [
-  "/usr/bin/pkexec", "/usr/libexec/hibermachy-policy-helper", "apply", "7200", "no"
+  "/fixture/authenticator", "/fixture/policy-helper", "apply", "7200", "no"
 ]);
 
 const fixture = context(true);
