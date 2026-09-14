@@ -34,7 +34,7 @@ Item {
   property string rejectedHistoryText: ""
   property bool journalHealthy: true
   property int journalSequence: 0
-  readonly property var retryScheduleMs: [100, 250, 1000]
+  readonly property var retryScheduleMs: [1000, 5000, 30000, 300000]
   property int historyRetryAttempt: 0
   property int nextAttemptNumber: 1
   property int nextEventNumber: 1
@@ -66,11 +66,15 @@ Item {
   property var systemPolicyFixture: ({ authorization: testMode ? "authorized" : "unavailable" })
   readonly property string helperPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_PATH")) || "/usr/libexec/hibermachy-policy-helper"
   readonly property string helperLauncherPath: (testMode && Quickshell.env("HBR_POLICY_HELPER_LAUNCHER")) || "/usr/bin/pkexec"
-  readonly property string effectivePolicyReaderPath: (testMode && Quickshell.env("HBR_EFFECTIVE_POLICY_READER")) || "/usr/bin/systemd-analyze"
+  readonly property string effectivePolicyReaderPath: (testMode && Quickshell.env("HBR_EFFECTIVE_POLICY_READER")) || decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-policy-readback")).replace(/^file:\/\//, ""))
   readonly property string contractProbePath: (testMode && Quickshell.env("HBR_CONTRACT_PROBE")) || decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-contract-probe")).replace(/^file:\/\//, ""))
   readonly property string capabilityProbePath: decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-sleep-capability-probe")).replace(/^file:\/\//, ""))
+  readonly property string evidenceObserverPath: decodeURIComponent(String(Qt.resolvedUrl("bin/hibermachy-sleep-evidence-observer")).replace(/^file:\/\//, ""))
   property bool contractProbeComplete: false
   property var contractSnapshot: null
+  property bool evidenceObserverReady: testMode
+  property string evidenceObserverAttemptId: ""
+  property bool evidenceDispatchStarted: false
 
   readonly property var statusSnapshot: ({
     pluginActivation: "active",
@@ -138,13 +142,26 @@ Item {
 
   function contractReasonCode(operation): string {
     if (!contractProbeComplete) return "HBR-CONTRACT-PREFLIGHT-PENDING"
-    if (!contractSnapshot || contractSnapshot.compatible !== true) {
+    if (!contractSnapshot || !operationContractReady(operation)) {
       if (operation === "manual") return "HBR-CONTRACT-INCOMPATIBLE-MANUAL"
       if (operation === "system-policy") return "HBR-CONTRACT-INCOMPATIBLE-SYSTEM-POLICY"
       if (operation === "diagnostics") return "HBR-CONTRACT-INCOMPATIBLE-DIAGNOSTICS"
       return "HBR-CONTRACT-INCOMPATIBLE-AUTOMATIC"
     }
     return "HBR-CONTRACT-READY"
+  }
+
+  function operationContractReady(operation): bool {
+    if (!contractSnapshot || !contractSnapshot.observations) return false
+    var required = operation === "manual"
+      ? ["shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema", "ipcFeatures", "qmlFeatures", "logind"]
+      : operation === "system-policy"
+        ? ["shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema", "ipcFeatures", "qmlFeatures", "helperProtocol", "systemPolicy"]
+      : operation === "diagnostics"
+        ? ["shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema", "ipcFeatures", "qmlFeatures", "userPolicy"]
+        : ["shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema", "ipcFeatures", "qmlFeatures", "idleMonitor", "helperProtocol", "userPolicy", "systemPolicy", "logind"]
+    return required.every(function(key) { return contractSnapshot.observations[key] === true })
+      && ((operation !== "automatic" && operation !== "status") || contractSnapshot.majorVersion === 4)
   }
 
   function contractReadiness(operation): string {
@@ -319,7 +336,8 @@ Item {
     if (!requestedSystemPolicy || !effectiveSystemPolicy) return "HBR-SYSTEM-POLICY-NOT-READY"
     if (!idleMonitorHealthy) return "HBR-IDLE-MONITOR-UNAVAILABLE"
     if (compositorIdleInhibited) return "HBR-COMPOSITOR-IDLE-INHIBITED"
-    if (stayAwakeKnown && stayAwakeEnabled) return "HBR-STAY-AWAKE-ENABLED"
+    if (!stayAwakeKnown) return "HBR-STAY-AWAKE-UNKNOWN"
+    if (stayAwakeEnabled) return "HBR-STAY-AWAKE-ENABLED"
     if (rearmRequired || !freshActivityObserved) return "HBR-FRESH-ACTIVITY-REQUIRED"
     return "HBR-AUTOMATIC-READY"
   }
@@ -344,8 +362,8 @@ Item {
   function automaticReadiness(): string {
     if (contractReadiness("automatic") !== "ready") return "not-ready"
     if (!policyAccepted || !policySnapshot || !policySnapshot.automaticPolicyEnabled) return "not-ready"
-    if (!requestedSystemPolicy || !effectiveSystemPolicy || systemPolicyReasonCode !== "HBR-SYSTEM-POLICY-APPLIED") return "not-ready"
-    if (!idleMonitorHealthy || compositorIdleInhibited || (stayAwakeKnown && stayAwakeEnabled)) return "not-ready"
+    if (!requestedSystemPolicy || !effectiveSystemPolicy || !["HBR-SYSTEM-POLICY-APPLIED", "HBR-SYSTEM-POLICY-DIFFERS"].includes(systemPolicyReasonCode)) return "not-ready"
+    if (!idleMonitorHealthy || compositorIdleInhibited || !stayAwakeKnown || stayAwakeEnabled) return "not-ready"
     if (rearmRequired || !freshActivityObserved) return "not-ready"
     return "ready"
   }
@@ -668,8 +686,8 @@ Item {
   function subscribeTypedEvidence(attemptId): var {
     var subscription = {
       attemptId: attemptId,
-      subscribedBeforeEnqueue: true,
-      signals: ["PrepareForSleep", "UnitResult", "TransactionReturn"],
+      subscribedBeforeEnqueue: testMode || evidenceObserverReady,
+      signals: testMode ? ["PrepareForSleep", "UnitResult", "TransactionReturn"] : ["PrepareForSleep", "JobRemoved", "PropertiesChanged"],
       entryWindowMs: entryEvidenceWindowMs,
       postResumeWindowMs: postResumeEvidenceWindowMs,
       deadlinePausesWhileUserspaceFrozen: true
@@ -784,6 +802,47 @@ Item {
     return { outcome: "Completed", reason: "HBR-SLEEP-TRANSACTION-RETURNED", evidence: "typed-transaction-return" }
   }
 
+  function finishObservedAttempt(event): void {
+    if (!executionInProgress || !lastSubmission || !event || event.attemptId !== lastSubmission.attemptId) return
+    var outcome = safeEnum(event.outcome, ["Failed", "Indeterminate", "Completed"], "Indeterminate")
+    var reason = safeReasonIdentity(event.reasonCode)
+    var evidence = safeEnum(event.evidenceLevel,
+      ["typed-transaction-return", "typed-unit-result", "missing-typed-evidence", "contradictory-typed-evidence"],
+      "missing-typed-evidence")
+    appendTerminal(eventEnvelope(lastSubmission.attemptId, lastSubmission.origin, lastSubmission.selectedMode,
+      "outcome-reconciliation", outcome, reason, evidence, {
+        hibernationConfirmed: false, evidenceObserver: true, freeFormJournalUsedForState: false
+      }))
+    evidenceObserverAttemptId = ""
+    evidenceDispatchStarted = false
+    executionInProgress = false
+  }
+
+  function dispatchObservedSleepRequest(): void {
+    if (!executionInProgress || !lastSubmission || !evidenceObserverAttemptId
+      || evidenceObserverAttemptId !== lastSubmission.attemptId || evidenceDispatchStarted) return
+    evidenceArmTimer.stop()
+    evidenceDispatchStarted = true
+    lastSubmission.evidenceSubscribedBeforeEnqueue = true
+    sleepRequestProcess.command = ["/usr/bin/systemctl", lastSubmission.selectedMode === "suspend" ? "suspend" : "suspend-then-hibernate"]
+    sleepRequestProcess.running = true
+  }
+
+  function handleEvidenceObserverLine(line): void {
+    var event = null
+    try { event = JSON.parse(String(line || "")) } catch (error) { event = null }
+    if (!event || typeof event !== "object") return
+    if (event.kind === "readiness") {
+      evidenceObserverReady = event.ready === true
+      return
+    }
+    if (event.kind === "attempt-armed" && event.attemptId === evidenceObserverAttemptId) {
+      dispatchObservedSleepRequest()
+      return
+    }
+    if (event.kind === "terminal") finishObservedAttempt(event)
+  }
+
   function policyReceipt(accepted, reasonCode, extra): string {
     var value = { schemaVersion: 1, envelopeVersion: 1, accepted: accepted, reasonCode: reasonCode,
       requestedSystemPolicy: requestedSystemPolicy, effectiveSystemPolicy: effectiveSystemPolicy,
@@ -798,6 +857,28 @@ Item {
       && typeof value.hibernateOnAcPower === "boolean"
   }
 
+  function policyTopLevelKeys(raw): var {
+    var text = String(raw || ""), keys = [], depth = 0, index = 0
+    while (index < text.length) {
+      var character = text[index]
+      if (character === '"') {
+        var start = index++
+        while (index < text.length) {
+          if (text[index] === "\\") { index += 2; continue }
+          if (text[index++] === '"') break
+        }
+        var literal = text.slice(start, index)
+        while (index < text.length && /\s/.test(text[index])) index += 1
+        if (depth === 1 && text[index] === ":") keys.push(JSON.parse(literal))
+        continue
+      }
+      if (character === "{") depth += 1
+      else if (character === "}") depth -= 1
+      index += 1
+    }
+    return keys
+  }
+
   function loadUserPolicy(raw, bytes): void {
     lastObservedPolicyText = String(raw || "")
     if ((bytes && bytes.byteLength > 16384) || String(raw).length > 16384) { policyAccepted = false; policyReasonCode = "HBR-POLICY-SIZE"; return }
@@ -806,25 +887,30 @@ Item {
       if (octets[0] === 0xEF && octets[1] === 0xBB && octets[2] === 0xBF) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
     }
     if (String(raw).charCodeAt(0) === 0xFEFF || String(raw).indexOf("\uFFFD") >= 0) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
-    if ((String(raw).match(/"revision"\s*:/g) || []).length > 1) {
+    if (String(raw || "").trim() === "") {
+      policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
+      policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
+      policyAccepted = true
+      policyReasonCode = policyDirectoryWritable ? "HBR-POLICY-DISABLED" : "HBR-POLICY-PERSISTENCE"
+      return
+    }
+    var keys
+    try { keys = policyTopLevelKeys(raw) } catch (error) { keys = null }
+    var requiredKeys = ["version", "revision", "automaticPolicyEnabled", "idleDelaySeconds"]
+    if (keys && keys.some(function(key, index) { return keys.indexOf(key) !== index })) {
       policyAccepted = false
       policyReasonCode = "HBR-POLICY-DUPLICATE-KEY"
       return
+    }
+    if (!keys || keys.length !== 4 || requiredKeys.some(function(key) { return keys.indexOf(key) < 0 })) {
+      policyAccepted = false; policyReasonCode = "HBR-POLICY-KEYS"; return
     }
     try {
       var value = JSON.parse(String(raw || ""))
       if (!value || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 1
         || typeof value.automaticPolicyEnabled !== "boolean" || !Number.isSafeInteger(value.idleDelaySeconds)
         || value.idleDelaySeconds < 300 || value.idleDelaySeconds > 86400) throw new Error("invalid policy")
-      if (policySnapshot && value.revision !== policySnapshot.revision) {
-        policyAccepted = false
-        policyReasonCode = "HBR-POLICY-REVISION-CONFLICT"
-        return
-      }
       var policyChanged = automaticPolicyChanged(policySnapshot, value)
-      if (policyChanged) {
-        value.revision = value.revision === Number.MAX_SAFE_INTEGER ? value.revision : value.revision + 1
-      }
       var persistenceBlocked = policyReasonCode === "HBR-POLICY-PERSISTENCE"
       var canonical = JSON.stringify({ version: 1, revision: value.revision,
         automaticPolicyEnabled: value.automaticPolicyEnabled, idleDelaySeconds: value.idleDelaySeconds }, null, 2) + "\n"
@@ -835,17 +921,8 @@ Item {
         : (value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED")
       if (policyChanged) requireFreshActivity()
     } catch (error) {
-      if (String(raw || "").trim() === "") {
-        policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
-        policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
-        policyAccepted = true
-        policyReasonCode = policyDirectoryWritable ? "HBR-POLICY-DISABLED" : "HBR-POLICY-PERSISTENCE"
-        return
-      }
       policyAccepted = false
-      if ((String(raw).match(/"revision"\s*:/g) || []).length > 1) policyReasonCode = "HBR-POLICY-DUPLICATE-KEY"
-      else if (String(raw).indexOf('"version":2') >= 0) policyReasonCode = "HBR-POLICY-SCHEMA"
-      else policyReasonCode = String(raw).indexOf('"idleDelaySeconds"') < 0 ? "HBR-POLICY-KEYS" : "HBR-POLICY-MALFORMED"
+      policyReasonCode = "HBR-POLICY-MALFORMED"
       return
     }
     policyAccepted = true
@@ -1014,13 +1091,18 @@ Item {
 
     var selectedMode = ""
     var selectionPath = ""
-    if (observation.stagedSleepExecutable) {
+    if (observation.stagedSleepExecutable && (!contractSnapshot || !contractSnapshot.observations
+      || contractSnapshot.observations.helperProtocol === true)) {
       selectedMode = "suspend-then-hibernate"
       selectionPath = "staged-sleep"
     } else if (observation.suspendExecutable) {
       selectedMode = "suspend"
       selectionPath = "suspend-fallback"
     } else return recordPreSubmissionOutcome(origin, "refused", "HBR-SLEEP-NOT-EXECUTABLE")
+
+    if ((!testMode && (!evidenceObserverReady || !evidenceObserverProcess.running))
+      || (testMode && !simulatedBoolean("HIBERMACHY_SIM_OBSERVER_READY", true)))
+      return recordPreSubmissionOutcome(origin, "failed", "HBR-SLEEP-OBSERVATION-FAILED")
 
     if (!persistLatch()) {
       executionInProgress = false
@@ -1049,8 +1131,10 @@ Item {
 
     if (!testMode) {
       lastSubmission.simulated = false
-      sleepRequestProcess.command = ["/usr/bin/systemctl", selectedMode === "suspend" ? "suspend" : "suspend-then-hibernate"]
-      sleepRequestProcess.running = true
+      evidenceObserverAttemptId = attemptId
+      evidenceDispatchStarted = false
+      evidenceObserverProcess.write(JSON.stringify({ type: "attempt-submitted", attemptId: attemptId, selectedMode: selectedMode }) + "\n")
+      evidenceArmTimer.restart()
       return result("accepted", "HBR-SLEEP-ACCEPTED", { attemptId: attemptId,
         selectedMode: selectedMode, selectionPath: selectionPath })
     }
@@ -1073,6 +1157,7 @@ Item {
   }
 
   function status(): string {
+    if (!testMode && !systemPolicyBusy && !initialPolicyProbe.running && !effectivePolicyProcess.running) initialPolicyProbe.running = true
     lastObservation = observeSleepExecutability()
     if (testActivityFixture !== null) {
       compositorIdleInhibited = testActivityFixture.inhibited
@@ -1116,16 +1201,33 @@ Item {
   }
 
   Process {
+    id: evidenceObserverProcess
+    command: [root.evidenceObserverPath]
+    stdinEnabled: true
+    stdout: SplitParser { onRead: function(line) { root.handleEvidenceObserverLine(line) } }
+    onExited: function(exitCode) {
+      root.evidenceObserverReady = false
+      if (!root.executionInProgress || !root.lastSubmission || root.testMode) return
+      root.finishObservedAttempt({ attemptId: root.lastSubmission.attemptId, outcome: root.evidenceDispatchStarted ? "Indeterminate" : "Failed",
+        reasonCode: "HBR-SLEEP-OBSERVATION-FAILED", evidenceLevel: "missing-typed-evidence" })
+    }
+  }
+
+  Timer {
+    id: evidenceArmTimer
+    interval: 2000
+    repeat: false
+    onTriggered: root.finishObservedAttempt({ attemptId: root.evidenceObserverAttemptId, outcome: "Failed",
+      reasonCode: "HBR-SLEEP-OBSERVATION-FAILED", evidenceLevel: "missing-typed-evidence" })
+  }
+
+  Process {
     id: sleepRequestProcess
     onExited: function(exitCode) {
       var attempt = root.lastSubmission
-      if (!attempt) return
-      root.appendTerminal(root.eventEnvelope(attempt.attemptId, attempt.origin, attempt.selectedMode,
-        "transaction-return", exitCode === 0 ? "Completed" : "Failed",
-        exitCode === 0 ? "HBR-SLEEP-TRANSACTION-RETURNED" : "HBR-SLEEP-UNIT-FAILED",
-        exitCode === 0 ? "typed-transaction-return" : "typed-unit-result",
-        { hibernationConfirmed: false, freeFormJournalUsedForState: false }))
-      root.executionInProgress = false
+      if (!attempt || !root.executionInProgress || exitCode === 0) return
+      root.finishObservedAttempt({ attemptId: attempt.attemptId, outcome: "Failed",
+        reasonCode: "HBR-SLEEP-UNIT-FAILED", evidenceLevel: "typed-unit-result" })
     }
   }
 
@@ -1174,18 +1276,8 @@ Item {
         return
       }
       if (!root.testMode) {
-        if (root.systemPolicyMutation === "apply") {
-          root.requestedSystemPolicy = root.systemPolicyDraft
-          root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-PENDING"
-          effectivePolicyProcess.running = true
-        } else {
-          root.requestedSystemPolicy = null
-          root.effectiveSystemPolicy = null
-          root.systemPolicyProvenance = []
-          root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-RESET"
-          root.systemPolicyMutation = ""
-          root.systemPolicyBusy = false
-        }
+        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-PENDING"
+        effectivePolicyProcess.running = true
         return
       }
       root.requestedSystemPolicy = root.systemPolicyMutation === "apply" ? root.systemPolicyDraft : null
@@ -1205,23 +1297,43 @@ Item {
     id: notificationProcess
   }
 
+  function loadSystemPolicyReadback(text, exitCode) {
+    var previousPolicy = JSON.stringify([requestedSystemPolicy, effectiveSystemPolicy, systemPolicyReasonCode])
+    var observed = null
+    try { observed = JSON.parse(text) } catch (_) {}
+    effectiveSystemPolicy = null
+    systemPolicyProvenance = []
+    if (exitCode !== 0 || !observed || observed.indeterminate) {
+      requestedSystemPolicy = null
+      systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+      return
+    }
+    requestedSystemPolicy = observed.requested && validSystemPolicy(observed.requested) ? observed.requested : null
+    var effective = observed.effective
+    if (effective && typeof effective.hibernateDelaySeconds === "number" && isFinite(effective.hibernateDelaySeconds)
+        && effective.hibernateDelaySeconds >= 0 && typeof effective.hibernateOnAcPower === "boolean")
+      effectiveSystemPolicy = effective
+    systemPolicyProvenance = Array.isArray(observed.provenance) ? observed.provenance : []
+    if (!requestedSystemPolicy) systemPolicyReasonCode = systemPolicyMutation === "reset" ? "HBR-SYSTEM-POLICY-RESET" : "HBR-SYSTEM-POLICY-NOT-READY"
+    else if (!effectiveSystemPolicy) systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
+    else systemPolicyReasonCode = systemPolicyMatches(effectiveSystemPolicy, requestedSystemPolicy)
+      ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
+    if (previousPolicy !== JSON.stringify([requestedSystemPolicy, effectiveSystemPolicy, systemPolicyReasonCode])) requireFreshActivity()
+  }
+
+  Timer {
+    interval: 5000
+    repeat: true
+    running: !root.testMode
+    onTriggered: if (!root.systemPolicyBusy && !initialPolicyProbe.running && !effectivePolicyProcess.running) initialPolicyProbe.running = true
+  }
+
   Process {
     id: effectivePolicyProcess
-    command: [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
+    command: [root.effectivePolicyReaderPath]
     stdout: StdioCollector { id: effectivePolicyStdout; waitForEnd: true }
     onExited: function(exitCode) {
-      var text = String(effectivePolicyStdout.text || "")
-      var delay = text.match(/HibernateDelaySec=([0-9]+)s/)
-      var onAc = text.match(/HibernateOnACPower=(yes|no)/)
-      if (exitCode !== 0 || !delay || !onAc || !Number.isSafeInteger(Number(delay[1]))) {
-        root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-READBACK-INDETERMINATE"
-      } else {
-        root.effectiveSystemPolicy = { hibernateDelaySeconds: Number(delay[1]), hibernateOnAcPower: onAc[1] === "yes" }
-        root.systemPolicyProvenance = []
-        root.systemPolicyReasonCode = root.systemPolicyMatches(root.effectiveSystemPolicy, root.requestedSystemPolicy)
-          ? "HBR-SYSTEM-POLICY-APPLIED" : "HBR-SYSTEM-POLICY-DIFFERS"
-        root.requireFreshActivity()
-      }
+      root.loadSystemPolicyReadback(effectivePolicyStdout.text, exitCode)
       root.systemPolicyMutation = ""
       root.systemPolicyBusy = false
     }
@@ -1229,21 +1341,9 @@ Item {
 
   Process {
     id: initialPolicyProbe
-    command: [root.effectivePolicyReaderPath, "cat-config", "systemd/sleep.conf"]
+    command: [root.effectivePolicyReaderPath]
     stdout: StdioCollector { id: initialPolicyStdout; waitForEnd: true }
-    onExited: function(exitCode) {
-      var text = String(initialPolicyStdout.text || "")
-      var owned = text.indexOf("90-hibermachy.conf") >= 0
-      var delay = text.match(/HibernateDelaySec=([0-9]+)s/)
-      var onAc = text.match(/HibernateOnACPower=(yes|no)/)
-      if (exitCode !== 0 || !owned || !delay || !onAc) return
-      var policy = { hibernateDelaySeconds: Number(delay[1]), hibernateOnAcPower: onAc[1] === "yes", scope: "machine-wide" }
-      if (!root.validSystemPolicy(policy)) return
-      root.requestedSystemPolicy = policy
-      root.effectiveSystemPolicy = policy
-      root.systemPolicyProvenance = ["/etc/systemd/sleep.conf.d/90-hibermachy.conf"]
-      root.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-APPLIED"
-    }
+    onExited: function(exitCode) { root.loadSystemPolicyReadback(initialPolicyStdout.text, exitCode) }
   }
 
   FileView {
@@ -1320,9 +1420,9 @@ Item {
     interval: root.retryDelayMs(root.historyRetryAttempt)
     repeat: true
     running: root.historyLoaded && !root.historyHealthy && !root.historyReplacementBlocked
-      && root.historyRetryAttempt < root.retryScheduleMs.length
+
     onTriggered: {
-      root.historyRetryAttempt += 1
+      root.historyRetryAttempt = Math.min(root.historyRetryAttempt + 1, root.retryScheduleMs.length - 1)
       if (root.persistHistory(false)) {
         root.historyHealthy = true
         root.historyRetryAttempt = 0
@@ -1360,6 +1460,7 @@ Item {
     if (!root.testMode) {
       bootIdentityFile.reload()
       sleepCapabilityProbe.running = true
+      evidenceObserverProcess.running = true
     }
     if (!root.testMode) initialPolicyProbe.running = true
     policyFile.reload()

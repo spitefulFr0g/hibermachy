@@ -88,6 +88,10 @@ fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(
         fs::read_to_string(target).unwrap(),
         "# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=900s\nHibernateOnACPower=no\n"
     );
@@ -190,7 +194,7 @@ fn reset_rejects_symlinks_hard_links_and_wrong_permissions_without_touching_outs
     assert!(target.exists());
 
     fs::remove_file(target.parent().unwrap().join("hard-link")).unwrap();
-    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o664)).unwrap();
     let permissions_result = run(&["reset"]);
     assert!(!permissions_result.status.success());
     assert!(target.exists());

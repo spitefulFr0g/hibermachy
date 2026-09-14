@@ -128,7 +128,7 @@ fn hbr_chk_helper_004_owned_target_rejects_unexpected_metadata_without_escape() 
     fs::remove_dir(&target).unwrap();
 
     fs::write(&target, canonical("900", "no")).unwrap();
-    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o664)).unwrap();
     assert!(!run(&["reset"]).status.success());
     assert_eq!(
         fs::read_to_string(&outside).unwrap(),

@@ -34,7 +34,13 @@ Panel {
   property int focusIndex: 0
   property var focusTargets: []
 
-  function open() { refresh(); controller.show() }
+  function open(payloadJson) {
+    refresh()
+    controller.show()
+    var payload = null
+    try { payload = JSON.parse(payloadJson || "{}") } catch (_) {}
+    if (payload && payload.action === "confirm-staged-sleep") beginManualConfirmation()
+  }
   function refresh() {
     if (!service || !service.policySnapshot) return
     if (!draftDirty) {
@@ -512,6 +518,10 @@ Panel {
   IpcHandler {
     enabled: Quickshell.env("HBR_TEST_MODE") === "1"
     target: "dev.hibermachy.panel-test"
+    function manualConfirmationState(): string {
+      return JSON.stringify({ kind: root.confirmationKind, message: root.confirmationMessage })
+    }
+    function cancelManualConfirmation(): void { root.cancelConfirmation() }
     function accessibilityJourney(): string { return root.accessibilityJourney() }
     function startDiagnosticsCopy(): void { root.copyDiagnosticsToClipboard() }
     function diagnosticsCopyState(): string {

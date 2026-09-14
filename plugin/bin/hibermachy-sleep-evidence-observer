@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+"""Read-only logind/systemd evidence observer for Hibermachy."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+
+import gi
+gi.require_version("Gio", "2.0")
+gi.require_version("GLib", "2.0")
+from gi.repository import Gio, GLib
+
+from evidence_core import EvidenceState, UNITS
+
+LOGIN1 = "org.freedesktop.login1"
+LOGIN1_PATH = "/org/freedesktop/login1"
+LOGIN1_MANAGER = "org.freedesktop.login1.Manager"
+SYSTEMD = "org.freedesktop.systemd1"
+SYSTEMD_PATH = "/org/freedesktop/systemd1"
+SYSTEMD_MANAGER = "org.freedesktop.systemd1.Manager"
+PROPERTIES = "org.freedesktop.DBus.Properties"
+UNIT_PATHS = {
+    "systemd-suspend.service": "/org/freedesktop/systemd1/unit/systemd_2dsuspend_2eservice",
+    "systemd-suspend-then-hibernate.service": "/org/freedesktop/systemd1/unit/systemd_2dsuspend_2dthen_2dhibernate_2eservice",
+}
+
+
+def emit(value):
+    sys.stdout.write(json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n")
+    sys.stdout.flush()
+
+
+def monotonic_ms():
+    # CLOCK_MONOTONIC pauses while Linux is suspended, so the entry window is
+    # not consumed while userspace is frozen.
+    return time.monotonic_ns() // 1_000_000
+
+
+def property_value(connection, destination, object_path, interface, name):
+    response = connection.call_sync(destination, object_path, PROPERTIES, "Get",
+                                    GLib.Variant("(ss)", (interface, name)),
+                                    GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE,
+                                    2000, None)
+    return response.unpack()[0]
+
+
+class Observer:
+    def __init__(self):
+        self.loop = GLib.MainLoop()
+        self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.entry_window_ms = self._entry_window_ms()
+        self.state = EvidenceState(emit, monotonic_ms, self.entry_window_ms)
+        self._subscribe()
+
+    def _entry_window_ms(self):
+        try:
+            delay_usec = int(property_value(self.system, LOGIN1, LOGIN1_PATH, LOGIN1_MANAGER, "InhibitDelayMaxUSec"))
+        except Exception:
+            delay_usec = 0
+        return max(30000, delay_usec // 1000 + 10000)
+
+    def _subscribe(self):
+        self.system.signal_subscribe(LOGIN1, LOGIN1_MANAGER, "PrepareForSleep", LOGIN1_PATH, None,
+                                     Gio.DBusSignalFlags.NONE, self._prepare_for_sleep, None)
+        self.system.signal_subscribe(SYSTEMD, SYSTEMD_MANAGER, "JobRemoved", SYSTEMD_PATH, None,
+                                     Gio.DBusSignalFlags.NONE, self._job_removed, None)
+        self.system.signal_subscribe(SYSTEMD, PROPERTIES, "PropertiesChanged", None, None,
+                                     Gio.DBusSignalFlags.NONE, self._properties_changed, None)
+        self.system.call_sync(SYSTEMD, SYSTEMD_PATH, SYSTEMD_MANAGER, "Subscribe", None, None,
+                              Gio.DBusCallFlags.NONE, 2000, None)
+        emit({"schemaVersion": 1, "envelopeVersion": 1, "kind": "readiness",
+              "ready": True, "entryWindowMs": self.entry_window_ms,
+              "subscriptions": {"logindPrepareForSleep": True, "systemdJobRemoved": True,
+                                "systemdPropertiesChanged": True, "systemdManagerSubscribe": True}})
+
+    def _prepare_for_sleep(self, _connection, _sender, _path, _interface, _signal, parameters, _data):
+        self.state.prepare_for_sleep(bool(parameters.unpack()[0]))
+
+    def _job_removed(self, _connection, _sender, _path, _interface, _signal, parameters, _data):
+        job_id, _job_path, unit, result = parameters.unpack()
+        self.state.job_removed(unit, result, job_id)
+
+    def _properties_changed(self, _connection, _sender, object_path, _interface, _signal, parameters, _data):
+        interface, changed, _invalidated = parameters.unpack()
+        values = changed  # GLib.Variant.unpack recursively unwraps a{sv} values.
+        expected = self.state.attempt and self.state.attempt["unit"]
+        if expected and object_path == UNIT_PATHS[expected]:
+            self.state.unit_properties(expected, interface, values)
+
+    def _unit_job_id(self, unit):
+        value = property_value(self.system, SYSTEMD, UNIT_PATHS[unit], "org.freedesktop.systemd1.Unit", "Job")
+        return int(value[0])
+
+    def _stdin(self, _source, condition):
+        if condition & (GLib.IO_HUP | GLib.IO_ERR):
+            self.loop.quit()
+            return False
+        line = sys.stdin.readline()
+        if not line:
+            self.loop.quit()
+            return False
+        try:
+            message = json.loads(line)
+            if not isinstance(message, dict) or message.get("type") != "attempt-submitted":
+                raise ValueError("invalid type")
+            if self.state.submit(message.get("attemptId"), message.get("selectedMode")):
+                self.state.arm(self._unit_job_id(UNITS[message["selectedMode"]]))
+        except Exception:
+            emit({"schemaVersion": 1, "envelopeVersion": 1, "kind": "control-refused",
+                  "reasonCode": "HBR-SLEEP-EVIDENCE-CONTROL-INVALID"})
+        return True
+
+    def run(self):
+        channel = GLib.IOChannel.unix_new(sys.stdin.fileno())
+        channel.set_encoding(None)
+        GLib.io_add_watch(channel, GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, self._stdin)
+        GLib.timeout_add(100, self._tick)
+        self.loop.run()
+
+    def _tick(self):
+        self.state.tick()
+        return True
+
+
+if __name__ == "__main__":
+    try:
+        Observer().run()
+    except Exception as error:
+        emit({"schemaVersion": 1, "envelopeVersion": 1, "kind": "readiness", "ready": False,
+              "reasonCode": "HBR-SLEEP-EVIDENCE-OBSERVER-UNAVAILABLE", "detail": type(error).__name__})
+        raise SystemExit(1)

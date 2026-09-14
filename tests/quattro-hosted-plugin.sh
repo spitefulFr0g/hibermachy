@@ -2,11 +2,13 @@
 set -euo pipefail
 
 if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
-  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_RUN_SOAK=1 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_SIM_SUSPEND=0 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=helper-missing "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVER_READY=0 HIBERMACHY_EXPECTED_KIND=failed "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=missing HIBERMACHY_EXPECTED_KIND=failed "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=later HIBERMACHY_EXPECTED_KIND=accepted HIBERMACHY_EXPECTED_MODE=suspend-then-hibernate "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_EVIDENCE=unit-failure HIBERMACHY_EXPECTED_KIND=accepted "$0"
@@ -74,7 +76,7 @@ if [[ "${HIBERMACHY_SEED_CORRUPT_HISTORY:-}" == 1 ]]; then
   printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[null],"suppressionSummaries":[],"notificationFingerprints":[],"private":"must remain archived"}' > "$test_root/.local/state/hibermachy/outcomes.json"
 fi
 if [[ "${HIBERMACHY_SEED_PRIVATE_HISTORY:-}" == 1 ]]; then
-  printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[{"phase":"private-phase-/home/alice","outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","evidenceLevel":"private-evidence","requestedMode":"private-request","selectedMode":"private-selected","details":{"private":"alice@example.test"}}],"suppressionSummaries":[],"notificationFingerprints":[],"notifications":[{"outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","humanCopy":"alice@example.test"}]}' > "$test_root/.local/state/hibermachy/outcomes.json"
+  printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[{"wallTime":"2030-01-01T00:00:00.000Z","phase":"private-phase-/home/alice","outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","evidenceLevel":"private-evidence","requestedMode":"private-request","selectedMode":"private-selected","details":{"private":"alice@example.test"}}],"suppressionSummaries":[],"notificationFingerprints":[],"notifications":[{"outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","humanCopy":"alice@example.test"}]}' > "$test_root/.local/state/hibermachy/outcomes.json"
 fi
 cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
@@ -106,10 +108,16 @@ chmod 700 "$helper_fixture" "$effective_fixture"
 cat > "$contract_fixture" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing ]]; then
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == helper-missing ]]; then
+  printf '%s\n' '{"compatible":false,"majorVersion":4,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":false,"userPolicy":true,"systemPolicy":false,"logind":true}'
+elif [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing ]]; then
   printf '%s\n' '{"compatible":false,"majorVersion":4,"shellReady":true,"pluginDiscovery":false}'
 elif [[ "${HIBERMACHY_SIM_CONTRACT:-}" == later ]]; then
   printf '%s\n' '{"compatible":true,"laterVersion":true,"majorVersion":4,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
+elif [[ "${HIBERMACHY_SIM_CONTRACT:-}" == major3 ]]; then
+  printf '%s\n' '{"compatible":true,"majorVersion":3,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
+elif [[ "${HIBERMACHY_SIM_CONTRACT:-}" == major5 ]]; then
+  printf '%s\n' '{"compatible":true,"majorVersion":5,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
 else
   printf '%s\n' '{"compatible":true,"majorVersion":4,"shellReady":true,"pluginDiscovery":true,"pluginActivation":true,"manifestSchema":true,"ipcFeatures":true,"qmlFeatures":true,"idleMonitor":true,"helperProtocol":true,"userPolicy":true,"systemPolicy":true,"logind":true}'
 fi
@@ -235,13 +243,24 @@ journey=$(call dev.hibermachy.panel-test accessibilityJourney)
 node -e '
   const j=JSON.parse(process.argv[1]);
   const highContrast = process.argv[2] === "high-contrast";
+  const contractCompatible = process.argv[3] === "" || process.argv[3] === "later";
   if (!j.accepted || !j.forward || !j.reverse || !j.confirmationOpened || !j.cancellationClosed || !j.focusRestored
     || !j.confirmationControls
     || !j.accessibleNames || !j.dirtyState || !j.disabledState || !j.statusAnnouncement || !j.nonColorStatus
-    || !j.authenticationCancellation || !j.authenticationFocusRestored || !j.contrastRoles
+    || (contractCompatible && (!j.authenticationCancellation || !j.authenticationFocusRestored)) || !j.contrastRoles
     || !(Number(j.scaledLayout) > (highContrast ? 32 : 0))) process.exit(1)
-' "$journey" "${HBR_TEST_THEME:-}"
+' "$journey" "${HBR_TEST_THEME:-}" "${HIBERMACHY_SIM_CONTRACT:-}"
 call shell hide "$plugin_id"
+if [[ $(node -e 'process.stdout.write(JSON.parse(process.argv[1]).manualStagedSleepReadiness)' "$status") == ready ]]; then
+  before_menu=$(status_json)
+  call shell summon "$plugin_id" '{"action":"confirm-staged-sleep"}' >/dev/null
+  confirmation=$(call dev.hibermachy.panel-test manualConfirmationState)
+  node -e 'const c=JSON.parse(process.argv[1]); if(c.kind!=="manual" || !c.message.includes("inhibitor"))process.exit(1)' "$confirmation"
+  after_menu=$(status_json)
+  node -e 'const a=JSON.parse(process.argv[1]),b=JSON.parse(process.argv[2]); if(JSON.stringify(a.lastSubmission)!==JSON.stringify(b.lastSubmission))process.exit(1)' "$before_menu" "$after_menu"
+  call dev.hibermachy.panel-test cancelManualConfirmation >/dev/null
+  call shell hide "$plugin_id"
+fi
 printf '%s\n' 'HBR-CHK-PLUGIN-002 activation remains inert'
 assert_disabled_status "$status"
 printf '%s\n' 'HBR-CHK-READINESS-001 readiness operations remain independent and live state is exposed'
@@ -275,7 +294,10 @@ if [[ "${HIBERMACHY_SEED_PRIVATE_HISTORY:-}" == 1 ]]; then
     const text = JSON.stringify(d);
     if (text.includes("alice") || text.includes("PRIVATE-ALICE") || text.includes("private-phase")) process.exit(1);
     const outcome = d.history.outcomes[0];
-    if (outcome.phase !== "unknown" || outcome.outcome !== "unknown" || outcome.reasonCode !== "HBR-DIAGNOSTICS-UNKNOWN-REASON" || outcome.evidenceLevel !== "none" || outcome.selectedMode !== "none") process.exit(1);
+    if (!outcome || outcome.phase !== "unknown" || outcome.outcome !== "unknown" || outcome.reasonCode !== "HBR-DIAGNOSTICS-UNKNOWN-REASON" || outcome.evidenceLevel !== "none" || outcome.selectedMode !== "none") {
+      console.error(JSON.stringify(d));
+      process.exit(1);
+    }
     if (d.notifications[0].humanCopy !== "The service recorded an additional diagnostic outcome.") process.exit(1);
   ' "$diagnostics"
 fi
@@ -321,9 +343,32 @@ if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == missing ]]; then
   exit 0
 fi
 
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == helper-missing ]]; then
+  printf '%s\n' 'HBR-CHK-CONTRACT-003 helper absence leaves diagnostics and manual suspend fallback usable'
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.diagnosticsReadiness!=="ready"||s.manualStagedSleepReadiness!=="ready")process.exit(1)' "$status"
+  receipt=$(call "$plugin_id" requestStagedSleep)
+  node -e 'const r=JSON.parse(process.argv[1]); if(r.kind!=="accepted"||r.selectedMode!=="suspend")process.exit(1)' "$receipt"
+  exit 0
+fi
+
+if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == major3 || "${HIBERMACHY_SIM_CONTRACT:-}" == major5 ]]; then
+  printf '%s\n' 'HBR-CHK-CONTRACT-004 incompatible Omarchy majors fail automatic staged sleep closed'
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.contractReadiness!=="not-ready"||s.automaticStagedSleepReadiness!=="not-ready")process.exit(1)' "$status"
+  exit 0
+fi
+
 if [[ "${HIBERMACHY_SIM_CONTRACT:-}" == later ]]; then
   printf '%s\n' 'HBR-CHK-CONTRACT-002 later verified feature probes remain usable'
   node -e 'const s=JSON.parse(process.argv[1]); if(s.contractReadiness!=="ready"||s.contractSnapshot.laterVersion!==true)process.exit(1)' "$status"
+  exit 0
+fi
+
+if [[ "${HIBERMACHY_SIM_OBSERVER_READY:-1}" == 0 ]]; then
+  printf '%s\n' 'HBR-CHK-EVIDENCE-002 observer readiness is required before any dispatch'
+  receipt=$(call "$plugin_id" requestStagedSleep)
+  node -e 'const r=JSON.parse(process.argv[1]); if(r.kind!=="failed"||r.reasonCode!=="HBR-SLEEP-OBSERVATION-FAILED")process.exit(1)' "$receipt"
+  status=$(status_json)
+  node -e 'const s=JSON.parse(process.argv[1]); if(s.simulatedSleepSubmissionCount!==0||s.openAttempt!==null||s.executionInProgress)process.exit(1)' "$status"
   exit 0
 fi
 
@@ -413,21 +458,22 @@ wait_for_policy 4 true 86400 >/dev/null
 # fixture below document that migration non-applicability at the hosted seam.
 printf '%s\n' 'HBR-CHK-POLICY-004 first-schema fixture canonicalizes as a new revision (pre-V1 migration N/A)'
 printf '%s' '{ "idleDelaySeconds": 721, "automaticPolicyEnabled": false, "revision": 4, "version": 1 }' > "$policy_path"
-wait_for_policy 5 false 721 >/dev/null
+wait_for_policy 4 false 721 >/dev/null
 node -e '
   const fs = require("fs");
   const actual = fs.readFileSync(process.argv[1], "utf8");
-  const expected = "{\n  \"version\": 1,\n  \"revision\": 5,\n  \"automaticPolicyEnabled\": false,\n  \"idleDelaySeconds\": 721\n}\n";
+  const expected = "{\n  \"version\": 1,\n  \"revision\": 4,\n  \"automaticPolicyEnabled\": false,\n  \"idleDelaySeconds\": 721\n}\n";
   if (actual !== expected) { console.error("canonical mismatch:\n" + JSON.stringify(actual)); process.exit(1); }
 ' "$policy_path"
 
-printf '%s\n' 'HBR-CHK-POLICY-005 differing external revision conflicts without repair'
+printf '%s\n' 'HBR-CHK-POLICY-005 valid external revisions are adopted and stale panel mutations are refused'
 conflict='{"version":1,"revision":6,"automaticPolicyEnabled":false,"idleDelaySeconds":721}'
 printf '%s' "$conflict" > "$policy_path"
-sleep 0.3
+wait_for_policy 6 false 721 >/dev/null
+conflict=$(<"$policy_path")
+receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":5,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
+assert_receipt "$receipt" false HBR-POLICY-STALE
 [[ $(<"$policy_path") == "$conflict" ]]
-status=$(status_json)
-node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-REVISION-CONFLICT") process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-POLICY-006 malformed policy stays untouched and disarmed until reset'
 printf '%s' '{"version":1,"revision":5,"automaticPolicyEnabled":true}' > "$policy_path"
@@ -445,7 +491,7 @@ node -e '
 ' "$status"
 receipt=$(call "$plugin_id" resetUserPolicy)
 assert_receipt "$receipt" true HBR-POLICY-RESET
-wait_for_policy 6 false 1800 >/dev/null
+wait_for_policy 7 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-007 rejects invalid and newer migration fixtures without repair'
 for invalid in \
@@ -456,6 +502,16 @@ for invalid in \
   sleep 0.2
   [[ $(<"$policy_path") == "$invalid" ]]
 done
+for invalid_document in \
+  '{"version":1,"revision":6,"automaticPolicyEnabled":false,"idleDelaySeconds":1800,"unknown":true}' \
+  '{"version":1,"revision":6,"automaticPolicyEnabled":false,"automaticPolicyEnabled":true,"idleDelaySeconds":1800}' \
+  '{"version":1,"revision":6,"automaticPolicyEnabled":false,"idleDelaySeconds":1800,"\u0072evision":7}'; do
+  printf '%s' "$invalid_document" > "$policy_path"
+  sleep 0.2
+  [[ $(<"$policy_path") == "$invalid_document" ]]
+  status=$(status_json)
+  node -e 'const s=JSON.parse(process.argv[1]); if(!["HBR-POLICY-KEYS","HBR-POLICY-DUPLICATE-KEY"].includes(s.reasonCode) || s.automaticPolicyEnablement!=="disabled")process.exit(1)' "$status"
+done
 duplicate='{"version":1,"revision":6,"revision":6,"automaticPolicyEnabled":false,"idleDelaySeconds":1800}'
 printf '%s' "$duplicate" > "$policy_path"
 sleep 0.2
@@ -463,14 +519,14 @@ sleep 0.2
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-DUPLICATE-KEY") process.exit(1)' "$status"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 7 false 1800 >/dev/null
+wait_for_policy 8 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-008 deterministic property samples reject invalid mutation values'
 for invalid_request in \
-  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":-1}' \
-  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":300.5}' \
-  '{"baseRevision":7,"automaticPolicyEnabled":"false","idleDelaySeconds":1800}' \
-  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":9007199254740992}'; do
+  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":-1}' \
+  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":300.5}' \
+  '{"baseRevision":8,"automaticPolicyEnabled":"false","idleDelaySeconds":1800}' \
+  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":9007199254740992}'; do
   receipt=$(call "$plugin_id" saveUserPolicy "$invalid_request")
   assert_receipt "$receipt" false HBR-POLICY-MUTATION-INVALID
 done
@@ -478,14 +534,14 @@ property_seed=1701
 for _ in $(seq 1 24); do
   property_seed=$(( (property_seed * 1103515245 + 12345) & 2147483647 ))
   invalid_delay=$((86401 + property_seed))
-  receipt=$(call "$plugin_id" saveUserPolicy "{\"baseRevision\":7,\"automaticPolicyEnabled\":false,\"idleDelaySeconds\":$invalid_delay}")
+  receipt=$(call "$plugin_id" saveUserPolicy "{\"baseRevision\":8,\"automaticPolicyEnabled\":false,\"idleDelaySeconds\":$invalid_delay}")
   assert_receipt "$receipt" false HBR-POLICY-MUTATION-INVALID
 done
 
 printf '%s\n' 'HBR-CHK-POLICY-009 concurrent mutations serialize at one revision'
-call "$plugin_id" saveUserPolicy '{"baseRevision":7,"automaticPolicyEnabled":true,"idleDelaySeconds":700}' > "$test_root/receipt-a" &
+call "$plugin_id" saveUserPolicy '{"baseRevision":8,"automaticPolicyEnabled":true,"idleDelaySeconds":700}' > "$test_root/receipt-a" &
 receipt_a_pid=$!
-call "$plugin_id" saveUserPolicy '{"baseRevision":7,"automaticPolicyEnabled":true,"idleDelaySeconds":701}' > "$test_root/receipt-b" &
+call "$plugin_id" saveUserPolicy '{"baseRevision":8,"automaticPolicyEnabled":true,"idleDelaySeconds":701}' > "$test_root/receipt-b" &
 receipt_b_pid=$!
 wait "$receipt_a_pid" "$receipt_b_pid"
 node -e '
@@ -494,10 +550,10 @@ node -e '
   if (receipts.filter(r => r.accepted).length !== 1 || receipts.filter(r => !r.accepted).length !== 1) process.exit(1);
 ' "$test_root"
 for expected_delay in 700 701; do
-  if wait_for_policy 8 true "$expected_delay" >/dev/null 2>&1; then break; fi
+  if wait_for_policy 9 true "$expected_delay" >/dev/null 2>&1; then break; fi
 done
 policy=$(user_policy_json)
-node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==8 || ![700,701].includes(p.idleDelaySeconds)) process.exit(1)' "$policy"
+node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==9 || ![700,701].includes(p.idleDelaySeconds)) process.exit(1)' "$policy"
 
 printf '%s\n' 'HBR-CHK-AUTO-001 automatic staged sleep waits for fresh activity after enablement'
 if [[ "${HIBERMACHY_EXPECTED_KIND:-accepted}" == accepted \
@@ -548,19 +604,21 @@ node -e 'const r=JSON.parse(process.argv[1]); if (r.kind!=="accepted") process.e
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.simulatedSleepSubmissionCount!==2 || !s.rearmRequired) process.exit(1)' "$status"
 
-printf '%s\n' 'HBR-CHK-SOAK-001 controlled clock and accelerated transitions stay bounded'
-call "$plugin_id" setClockFixture '{"nowMs":1893456000000}' | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if(r.kind!=="accepted"||r.reasonCode!=="HBR-TEST-CLOCK-SET")process.exit(1)'
-soak=$(call "$plugin_id" runAcceleratedSoak 2000)
-node -e '
-  const r=JSON.parse(process.argv[1]);
-  if (!r.accepted || r.reasonCode !== "HBR-TEST-SOAK-COMPLETE" || r.transitions !== 2000
-    || r.acceptedTransitions !== 2000 || r.refusedTransitions !== 0 || r.duplicateAttempt
-    || r.busyAtEnd || r.historyCount > 256 || r.maxHistory > 256 || r.maxNotifications > 20 || r.maxDiagnosticsBytes > 20000
-    || r.finalRearmRequired !== true || r.finalStatus.manual !== "ready") {
-    console.error(JSON.stringify(r));
-    process.exit(1);
-  }
-' "$soak"
+if [[ "${HIBERMACHY_RUN_SOAK:-0}" == 1 ]]; then
+  printf '%s\n' 'HBR-CHK-SOAK-001 controlled clock and accelerated transitions stay bounded'
+  call "$plugin_id" setClockFixture '{"nowMs":1893456000000}' | node -e 'const r=JSON.parse(require("fs").readFileSync(0)); if(r.kind!=="accepted"||r.reasonCode!=="HBR-TEST-CLOCK-SET")process.exit(1)'
+  soak=$(call "$plugin_id" runAcceleratedSoak 2000)
+  node -e '
+    const r=JSON.parse(process.argv[1]);
+    if (!r.accepted || r.reasonCode !== "HBR-TEST-SOAK-COMPLETE" || r.transitions !== 2000
+      || r.acceptedTransitions !== 2000 || r.refusedTransitions !== 0 || r.duplicateAttempt
+      || r.busyAtEnd || r.historyCount > 256 || r.maxHistory > 256 || r.maxNotifications > 20 || r.maxDiagnosticsBytes > 20000
+      || r.finalRearmRequired !== true || r.finalStatus.manual !== "ready") {
+      console.error(JSON.stringify(r));
+      process.exit(1);
+    }
+  ' "$soak"
+fi
 fi
 
 printf '%s\n' 'HBR-CHK-POLICY-010 byte and UTF-8 failures stay untouched and disarm automation'
@@ -577,7 +635,7 @@ sleep 0.3
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-ENCODING") process.exit(1)' "$status"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 9 false 1800 >/dev/null
+wait_for_policy 10 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-011 atomic replacement failure preserves the current snapshot'
 chmod 500 "${policy_path%/*}"
@@ -586,16 +644,16 @@ for _ in $(seq 1 20); do
   if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.reasonCode==="HBR-POLICY-PERSISTENCE" ? 0 : 1)' "$status"; then break; fi
   sleep 0.1
 done
-receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":9,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
+receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":10,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
 assert_receipt "$receipt" false HBR-POLICY-PERSISTENCE
 sleep 0.3
 policy=$(user_policy_json)
-node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==9 || p.automaticPolicyEnabled!==false) process.exit(1)' "$policy"
+node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==10 || p.automaticPolicyEnabled!==false) process.exit(1)' "$policy"
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-PERSISTENCE" || s.automaticPolicyEnablement!=="disabled") process.exit(1)' "$status"
 chmod 700 "${policy_path%/*}"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 10 false 1800 >/dev/null
+wait_for_policy 11 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-012 revision exhaustion returns the current snapshot'
 call shell setPluginEnabled "$plugin_id" false | grep -qx 'ok'

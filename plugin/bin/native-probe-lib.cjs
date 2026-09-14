@@ -9,6 +9,7 @@ const BUSCTL = "/usr/bin/busctl";
 const QUICKSHELL = "/usr/bin/quickshell";
 const HELPER = "/usr/libexec/hibermachy-policy-helper";
 const OMARCHY_SHELL = "/usr/share/omarchy/shell";
+const PACMAN = "/usr/bin/pacman";
 const LOGIN1_DESTINATION = "org.freedesktop.login1";
 const LOGIN1_PATH = "/org/freedesktop/login1";
 const LOGIN1_INTERFACE = "org.freedesktop.login1.Manager";
@@ -78,11 +79,19 @@ function includesAll(value, fragments) {
   return fragments.every((fragment) => value.includes(fragment));
 }
 
-function helperHasProtocol(result) {
-  if (!ok(result)) return false;
-  const fields = Object.fromEntries(text(result).split(/\s+/).map((field) => field.split("=", 2)).filter((pair) => pair.length === 2));
-  return /^\d+\.\d+\.\d+/.test(String(fields.release || ""))
-    && fields["protocol-min"] === "1" && fields["protocol-max"] === "1";
+function helperHasProtocol(result, protocol) {
+  if (!ok(result) || !protocol || !Number.isSafeInteger(protocol.min) || !Number.isSafeInteger(protocol.max)
+      || protocol.min < 1 || protocol.max < protocol.min) return false;
+  const match = text(result).match(/^release=([0-9]+\.[0-9]+\.[0-9]+) protocol-min=([0-9]+) protocol-max=([0-9]+)$/);
+  if (!match) return false;
+  const minimum = Number(match[2]), maximum = Number(match[3]);
+  return Number.isSafeInteger(minimum) && Number.isSafeInteger(maximum) && minimum >= 1 && maximum >= minimum
+    && Math.max(minimum, protocol.min) <= Math.min(maximum, protocol.max);
+}
+
+function omarchyVersion(result) {
+  const match = text(result).match(/^(?:omarchy\s+)?((\d+)\.(\d+)\.(\d+)(?:[-+].*)?)$/);
+  return match ? { raw: match[1], major: Number(match[2]) } : null;
 }
 
 function evaluateContract(adapter) {
@@ -99,9 +108,10 @@ function evaluateContract(adapter) {
   const plugins = parseJson(text(listed));
   const ownPlugin = Array.isArray(plugins) ? plugins.find((entry) => entry && entry.id === "dev.hibermachy") : null;
   const helper = run(HELPER, ["probe"]);
+  const version = omarchyVersion(run(PACMAN, ["-Q", "omarchy"]));
   // `probe` is the helper's only unprivileged verb. If the package is absent
   // or its protocol is incompatible, both helperProtocol and systemPolicy stay false.
-  const helperProtocol = helperHasProtocol(helper);
+  const helperProtocol = helperHasProtocol(helper, manifest && manifest.protocol);
   const logind = evaluateCapability({ run, read }) !== null;
 
   const observations = {
@@ -115,12 +125,14 @@ function evaluateContract(adapter) {
     helperProtocol,
     userPolicy: includesAll(service, ["policyPath", "FileView", "loadUserPolicy"]),
     systemPolicy: helperProtocol && includesAll(service, ["helperPath", "effectivePolicyReaderPath", "systemPolicyMatches"]),
-    logind
+    logind,
+    omarchyVersion: !!version
   };
   return {
     compatible: REQUIRED_CONTRACTS.every((key) => observations[key] === true),
-    majorVersion: 4,
-    ...observations
+    ...observations,
+    majorVersion: version ? version.major : null,
+    omarchyVersion: version ? version.raw : null,
   };
 }
 
@@ -162,6 +174,7 @@ module.exports = {
   LOGIN1_INTERFACE,
   LOGIN1_PATH,
   OMARCHY_SHELL,
+  PACMAN,
   QUICKSHELL,
   REQUIRED_CONTRACTS,
   evaluateCapability,

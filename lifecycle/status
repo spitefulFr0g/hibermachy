@@ -8,6 +8,9 @@ usage() {
 
 [[ ${1:-} == status ]] || usage
 shift
+if [[ $# == 0 ]]; then
+  exec node "$(cd "$(dirname "$0")" && pwd)/production.mjs" status
+fi
 [[ ${1:-} == --root && -n ${2:-} && $# == 2 ]] || usage
 root=$2
 

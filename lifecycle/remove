@@ -7,6 +7,12 @@ import { spawnSync } from "node:child_process";
 const [command, ...args] = process.argv.slice(2);
 const rootIndex = args.indexOf("--root");
 const root = rootIndex >= 0 ? args[rootIndex + 1] : "";
+
+if (!root) {
+  const production = path.join(path.dirname(new URL(import.meta.url).pathname), "production.mjs");
+  const result = spawnSync(process.execPath, [production, command, ...args], { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 const install = path.join(path.dirname(new URL(import.meta.url).pathname), "install");
 
 function inventory() {

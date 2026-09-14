@@ -23,6 +23,34 @@ changed source tree. The authoritative work is tracked by
   validated Node separately, checked generated metadata and removed a
   production Rust warning.
 
+## Production completion
+
+- Added a root manifest accepted by the installed public Omarchy validator;
+  its relative entry points load the existing plugin directory.
+- Added operator lifecycle dispatch through native Omarchy commands and the
+  package manager, with injected command adapters restricted to explicit tests.
+- Added ordered effective-policy readback with separate owned-policy recognition,
+  administrator provenance and periodic/status-triggered refresh. The parser
+  follows systemd's [sleep configuration](https://github.com/systemd/systemd/blob/main/src/shared/sleep-config.c).
+- Newly written policy files are root-owned mode 0644 so the desktop can read
+  public configuration. Only root can write them. Legacy mode 0600 remains
+  recognized for reset/update; unfamiliar metadata is still refused.
+- Added typed logind/systemd observation before dispatch. A command's successful
+  exit alone cannot produce Completed. The observer requires a matching new
+  unit job and sleep entry/resume evidence; missing evidence is indeterminate.
+- Corrected history retry intervals to 1, 5, 30 seconds, then five minutes.
+
+The plugin's runtime needs Node.js, Python 3 with PyGObject/Gio, Quickshell,
+Wayland clipboard utilities and Omarchy's public plugin interfaces. Observer
+startup failure disarms dispatch. Installing the helper alone does not establish
+plugin runtime readiness.
+
+The integration branch consolidates repairs to the assembled implementation
+under issue #24, following the owner's instruction to finish the whole project.
+Earlier per-ticket implementation branches are preserved as historical evidence.
+This is an explicit workflow exception; issue closure still waits for reviewed
+merge, and release gates remain separate.
+
 ## Verification in progress
 
 The focused default hosted journey passed before the final native-probe wiring;

@@ -8,7 +8,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::MetadataExt,
+        unix::fs::{MetadataExt, PermissionsExt},
     },
 };
 
@@ -140,7 +140,7 @@ fn validate_regular_file(metadata: &Metadata) -> Result<(), &'static str> {
     if !metadata.is_file()
         || metadata.uid() != expected_owner()
         || metadata.nlink() != 1
-        || metadata.mode() & 0o777 != 0o600
+        || !matches!(metadata.mode() & 0o777, 0o600 | 0o644)
     {
         return Err("unsafe filesystem state");
     }
@@ -380,7 +380,12 @@ fn restore_removed_policy(directory: &File, target: &CString, bytes: &[u8], suff
     let Some((temporary, mut file)) = recovery else {
         return false;
     };
-    if file.write_all(bytes).is_err() || synchronize(&file).is_err() {
+    if file.write_all(bytes).is_err()
+        || file
+            .set_permissions(std::fs::Permissions::from_mode(0o644))
+            .is_err()
+        || synchronize(&file).is_err()
+    {
         // SAFETY: only this invocation's exclusive temporary name is removed.
         if unsafe { unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
             return false;
@@ -432,6 +437,10 @@ pub fn replace_and_verify(
     let result = (|| {
         temp.write_all(bytes).map_err(|_| "write failed")?;
         inject_fault("write")?;
+        // Policy contains public settings; only root may write, but the desktop
+        // must read the winning configuration without privilege.
+        temp.set_permissions(std::fs::Permissions::from_mode(0o644))
+            .map_err(|_| "metadata failed")?;
         synchronize(&temp)?;
         inject_fault("sync")?;
         if recognized_existing_target(&directory, &target)? != previous_policy {

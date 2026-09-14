@@ -11,7 +11,7 @@ shell_files=(
 
 printf '%s\n' 'HBR-CHK-STATIC-001 JSON, shell, and whitespace validation'
 node -e 'for (const file of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(file))' \
-  "$root/package.json" "$root/plugin/manifest.json"
+  "$root/package.json" "$root/plugin/manifest.json" "$root/manifest.json"
 for file in "${shell_files[@]}"; do
   bash -n "$file"
 done
@@ -21,7 +21,7 @@ if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/pac
 fi
 
 printf '%s\n' 'HBR-CHK-STATIC-002 lifecycle JavaScript parses without executing host operations'
-for file in "$root/lifecycle/install" "$root/lifecycle/remove"; do
+for file in "$root/lifecycle/install" "$root/lifecycle/remove" "$root/lifecycle/production.mjs" "$root/plugin/bin/policy-readback.cjs" "$root/plugin/bin/hibermachy-policy-readback"; do
   node --check "$file"
 done
 

@@ -9,6 +9,12 @@ const [command, ...arguments_] = process.argv.slice(2);
 const rootIndex = arguments_.indexOf("--root");
 const root = rootIndex >= 0 ? arguments_[rootIndex + 1] : "";
 
+if (!root) {
+  const production = path.join(path.dirname(fileURLToPath(import.meta.url)), "production.mjs");
+  const result = spawnSync(process.execPath, [production, command, ...arguments_], { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
+
 function inventory() {
   const statusPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "status");
   const result = spawnSync(statusPath, ["status", "--root", root], { encoding: "utf8" });
@@ -273,7 +279,7 @@ function matchingArrayEnd(source, start) {
 
 const menuEntries = [
   { id: "setup.hibermachy", value: { managedBy: "hibermachy", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" } },
-  { id: "system.hibermachy-staged-sleep", value: { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "quickshell ipc call dev.hibermachy requestStagedSleep", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" } }
+  { id: "system.hibermachy-staged-sleep", value: { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" } }
 ];
 function sameEntry(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
