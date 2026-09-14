@@ -33,6 +33,7 @@ unsafe extern "C" {
     fn geteuid() -> c_uint;
     fn open(path: *const c_char, flags: c_int) -> c_int;
     fn openat(directory: c_int, path: *const c_char, flags: c_int, mode: c_uint) -> c_int;
+    fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
     fn renameat2(
         old_directory: c_int,
         old: *const c_char,
@@ -147,7 +148,7 @@ fn validate_regular_file(metadata: &Metadata) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn policy_directory(path: &str) -> Result<File, &'static str> {
+fn policy_directory(path: &str, create_missing_final: bool) -> Result<Option<File>, &'static str> {
     let root = c_name("/")?;
     let mut directory = call_open(&root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)?;
     validate_directory(
@@ -155,18 +156,51 @@ fn policy_directory(path: &str) -> Result<File, &'static str> {
             .metadata()
             .map_err(|_| "unsafe filesystem state")?,
     )?;
-    for component in path.split('/').filter(|component| !component.is_empty()) {
+    let components: Vec<_> = path
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+    for (index, component) in components.iter().enumerate() {
         let name = c_name(component)?;
-        let next = call_openat(
+        let is_final = index + 1 == components.len();
+        let next = match call_openat(
             &directory,
             &name,
             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC,
             0,
-        )?;
+        ) {
+            Ok(next) => next,
+            Err(_) if std::io::Error::last_os_error().raw_os_error() == Some(2) && is_final => {
+                if !create_missing_final {
+                    return Ok(None);
+                }
+                // SAFETY: the parent descriptor and fixed final component have already
+                // been validated; creation cannot traverse a caller-selected path.
+                let created = unsafe { mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o755) } == 0;
+                if !created && std::io::Error::last_os_error().raw_os_error() != Some(17) {
+                    return Err("unsafe filesystem state");
+                }
+                let next = call_openat(
+                    &directory,
+                    &name,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC,
+                    0,
+                )?;
+                validate_directory(&next.metadata().map_err(|_| "unsafe filesystem state")?)?;
+                if created {
+                    next.set_permissions(std::fs::Permissions::from_mode(0o755))
+                        .map_err(|_| "unsafe filesystem state")?;
+                    synchronize(&next)?;
+                    synchronize(&directory)?;
+                }
+                next
+            }
+            Err(_) => return Err("unsafe filesystem state"),
+        };
         validate_directory(&next.metadata().map_err(|_| "unsafe filesystem state")?)?;
         directory = next;
     }
-    Ok(directory)
+    Ok(Some(directory))
 }
 
 fn synchronize(file: &File) -> Result<(), &'static str> {
@@ -276,7 +310,9 @@ fn inject_fault(_stage: &str) -> Result<(), &'static str> {
 }
 
 pub fn remove_and_verify(directory_path: &str, target_name: &str) -> Result<(), &'static str> {
-    let directory = policy_directory(directory_path)?;
+    let Some(directory) = policy_directory(directory_path, false)? else {
+        return Ok(());
+    };
     // SAFETY: the descriptor is live for the syscall.
     if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {
         return Err("lock failed");
@@ -416,7 +452,7 @@ pub fn replace_and_verify(
     target_name: &str,
     bytes: &[u8],
 ) -> Result<(), &'static str> {
-    let directory = policy_directory(directory_path)?;
+    let directory = policy_directory(directory_path, true)?.ok_or("unsafe filesystem state")?;
     // A directory lock serializes cooperating helper instances without a second policy object.
     // SAFETY: the descriptor is live for the syscall.
     if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {

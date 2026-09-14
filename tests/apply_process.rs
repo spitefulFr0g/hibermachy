@@ -69,6 +69,20 @@ fn prepare_policy_directory() -> std::path::PathBuf {
     target
 }
 
+fn prepare_policy_root_without_systemd_parent() -> std::path::PathBuf {
+    let target = policy_path();
+    fs::remove_dir_all(target.parent().unwrap().ancestors().nth(3).unwrap()).ok();
+    fs::create_dir_all(target.parent().unwrap().parent().unwrap().parent().unwrap()).unwrap();
+    target
+}
+
+fn prepare_policy_parent_without_directory() -> std::path::PathBuf {
+    let target = policy_path();
+    fs::remove_dir_all(target.parent().unwrap().ancestors().nth(3).unwrap()).ok();
+    fs::create_dir_all(target.parent().unwrap().parent().unwrap()).unwrap();
+    target
+}
+
 fn recognized_policy(delay: &str, ac: &str) -> String {
     format!(
         "# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec={delay}s\nHibernateOnACPower={ac}\n"
@@ -95,6 +109,56 @@ fn apply_writes_the_recognized_requested_policy_at_the_owned_target() {
         fs::read_to_string(target).unwrap(),
         "# Managed by Hibermachy. Do not edit.\n[Sleep]\nHibernateDelaySec=900s\nHibernateOnACPower=no\n"
     );
+}
+
+#[test]
+fn apply_creates_a_missing_final_policy_directory_beneath_validated_parents() {
+    let _guard = test_lock();
+    let target = prepare_policy_parent_without_directory();
+
+    let result = run(&["apply", "900", "no"]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        recognized_policy("900", "no")
+    );
+    assert_eq!(
+        fs::metadata(target.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+}
+
+#[test]
+fn apply_refuses_to_create_a_missing_nonfinal_policy_parent() {
+    let _guard = test_lock();
+    let target = prepare_policy_root_without_systemd_parent();
+
+    let result = run(&["apply", "900", "no"]);
+
+    assert!(!result.status.success());
+    assert!(!target.parent().unwrap().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_refuses_a_writable_existing_policy_directory() {
+    let _guard = test_lock();
+    let target = prepare_policy_directory();
+    fs::set_permissions(target.parent().unwrap(), fs::Permissions::from_mode(0o777)).unwrap();
+
+    let result = run(&["apply", "900", "no"]);
+
+    assert!(!result.status.success());
+    assert!(!target.exists());
 }
 
 #[test]
@@ -153,6 +217,21 @@ fn reset_is_idempotent_for_absent_target_and_removes_a_canonical_policy() {
     assert!(!target.exists());
     assert_eq!(fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
     assert!(run(&["reset"]).status.success());
+}
+
+#[test]
+fn reset_is_a_no_op_when_the_final_policy_directory_is_absent() {
+    let _guard = test_lock();
+    let target = prepare_policy_parent_without_directory();
+
+    let result = run(&["reset"]);
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!target.parent().unwrap().exists());
 }
 
 #[test]
