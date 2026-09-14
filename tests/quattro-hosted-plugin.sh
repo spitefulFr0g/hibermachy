@@ -458,22 +458,21 @@ wait_for_policy 4 true 86400 >/dev/null
 # fixture below document that migration non-applicability at the hosted seam.
 printf '%s\n' 'HBR-CHK-POLICY-004 first-schema fixture canonicalizes as a new revision (pre-V1 migration N/A)'
 printf '%s' '{ "idleDelaySeconds": 721, "automaticPolicyEnabled": false, "revision": 4, "version": 1 }' > "$policy_path"
-wait_for_policy 4 false 721 >/dev/null
+wait_for_policy 5 false 721 >/dev/null
 node -e '
   const fs = require("fs");
   const actual = fs.readFileSync(process.argv[1], "utf8");
-  const expected = "{\n  \"version\": 1,\n  \"revision\": 4,\n  \"automaticPolicyEnabled\": false,\n  \"idleDelaySeconds\": 721\n}\n";
+  const expected = "{\n  \"version\": 1,\n  \"revision\": 5,\n  \"automaticPolicyEnabled\": false,\n  \"idleDelaySeconds\": 721\n}\n";
   if (actual !== expected) { console.error("canonical mismatch:\n" + JSON.stringify(actual)); process.exit(1); }
 ' "$policy_path"
 
-printf '%s\n' 'HBR-CHK-POLICY-005 valid external revisions are adopted and stale panel mutations are refused'
+printf '%s\n' 'HBR-CHK-POLICY-005 differing external revision conflicts without repair'
 conflict='{"version":1,"revision":6,"automaticPolicyEnabled":false,"idleDelaySeconds":721}'
 printf '%s' "$conflict" > "$policy_path"
-wait_for_policy 6 false 721 >/dev/null
-conflict=$(<"$policy_path")
-receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":5,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
-assert_receipt "$receipt" false HBR-POLICY-STALE
+sleep 0.3
 [[ $(<"$policy_path") == "$conflict" ]]
+status=$(status_json)
+node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-REVISION-CONFLICT") process.exit(1)' "$status"
 
 printf '%s\n' 'HBR-CHK-POLICY-006 malformed policy stays untouched and disarmed until reset'
 printf '%s' '{"version":1,"revision":5,"automaticPolicyEnabled":true}' > "$policy_path"
@@ -491,7 +490,7 @@ node -e '
 ' "$status"
 receipt=$(call "$plugin_id" resetUserPolicy)
 assert_receipt "$receipt" true HBR-POLICY-RESET
-wait_for_policy 7 false 1800 >/dev/null
+wait_for_policy 6 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-007 rejects invalid and newer migration fixtures without repair'
 for invalid in \
@@ -519,14 +518,14 @@ sleep 0.2
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-DUPLICATE-KEY") process.exit(1)' "$status"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 8 false 1800 >/dev/null
+wait_for_policy 7 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-008 deterministic property samples reject invalid mutation values'
 for invalid_request in \
-  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":-1}' \
-  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":300.5}' \
-  '{"baseRevision":8,"automaticPolicyEnabled":"false","idleDelaySeconds":1800}' \
-  '{"baseRevision":8,"automaticPolicyEnabled":false,"idleDelaySeconds":9007199254740992}'; do
+  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":-1}' \
+  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":300.5}' \
+  '{"baseRevision":7,"automaticPolicyEnabled":"false","idleDelaySeconds":1800}' \
+  '{"baseRevision":7,"automaticPolicyEnabled":false,"idleDelaySeconds":9007199254740992}'; do
   receipt=$(call "$plugin_id" saveUserPolicy "$invalid_request")
   assert_receipt "$receipt" false HBR-POLICY-MUTATION-INVALID
 done
@@ -534,14 +533,14 @@ property_seed=1701
 for _ in $(seq 1 24); do
   property_seed=$(( (property_seed * 1103515245 + 12345) & 2147483647 ))
   invalid_delay=$((86401 + property_seed))
-  receipt=$(call "$plugin_id" saveUserPolicy "{\"baseRevision\":8,\"automaticPolicyEnabled\":false,\"idleDelaySeconds\":$invalid_delay}")
+  receipt=$(call "$plugin_id" saveUserPolicy "{\"baseRevision\":7,\"automaticPolicyEnabled\":false,\"idleDelaySeconds\":$invalid_delay}")
   assert_receipt "$receipt" false HBR-POLICY-MUTATION-INVALID
 done
 
 printf '%s\n' 'HBR-CHK-POLICY-009 concurrent mutations serialize at one revision'
-call "$plugin_id" saveUserPolicy '{"baseRevision":8,"automaticPolicyEnabled":true,"idleDelaySeconds":700}' > "$test_root/receipt-a" &
+call "$plugin_id" saveUserPolicy '{"baseRevision":7,"automaticPolicyEnabled":true,"idleDelaySeconds":700}' > "$test_root/receipt-a" &
 receipt_a_pid=$!
-call "$plugin_id" saveUserPolicy '{"baseRevision":8,"automaticPolicyEnabled":true,"idleDelaySeconds":701}' > "$test_root/receipt-b" &
+call "$plugin_id" saveUserPolicy '{"baseRevision":7,"automaticPolicyEnabled":true,"idleDelaySeconds":701}' > "$test_root/receipt-b" &
 receipt_b_pid=$!
 wait "$receipt_a_pid" "$receipt_b_pid"
 node -e '
@@ -550,10 +549,10 @@ node -e '
   if (receipts.filter(r => r.accepted).length !== 1 || receipts.filter(r => !r.accepted).length !== 1) process.exit(1);
 ' "$test_root"
 for expected_delay in 700 701; do
-  if wait_for_policy 9 true "$expected_delay" >/dev/null 2>&1; then break; fi
+  if wait_for_policy 8 true "$expected_delay" >/dev/null 2>&1; then break; fi
 done
 policy=$(user_policy_json)
-node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==9 || ![700,701].includes(p.idleDelaySeconds)) process.exit(1)' "$policy"
+node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==8 || ![700,701].includes(p.idleDelaySeconds)) process.exit(1)' "$policy"
 
 printf '%s\n' 'HBR-CHK-AUTO-001 automatic staged sleep waits for fresh activity after enablement'
 if [[ "${HIBERMACHY_EXPECTED_KIND:-accepted}" == accepted \
@@ -635,7 +634,7 @@ sleep 0.3
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-ENCODING") process.exit(1)' "$status"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 10 false 1800 >/dev/null
+wait_for_policy 9 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-011 atomic replacement failure preserves the current snapshot'
 chmod 500 "${policy_path%/*}"
@@ -644,16 +643,16 @@ for _ in $(seq 1 20); do
   if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.reasonCode==="HBR-POLICY-PERSISTENCE" ? 0 : 1)' "$status"; then break; fi
   sleep 0.1
 done
-receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":10,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
+receipt=$(call "$plugin_id" saveUserPolicy '{"baseRevision":9,"automaticPolicyEnabled":true,"idleDelaySeconds":900}')
 assert_receipt "$receipt" false HBR-POLICY-PERSISTENCE
 sleep 0.3
 policy=$(user_policy_json)
-node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==10 || p.automaticPolicyEnabled!==false) process.exit(1)' "$policy"
+node -e 'const p=JSON.parse(process.argv[1]); if (p.revision!==9 || p.automaticPolicyEnabled!==false) process.exit(1)' "$policy"
 status=$(status_json)
 node -e 'const s=JSON.parse(process.argv[1]); if (s.reasonCode!=="HBR-POLICY-PERSISTENCE" || s.automaticPolicyEnablement!=="disabled") process.exit(1)' "$status"
 chmod 700 "${policy_path%/*}"
 call "$plugin_id" resetUserPolicy >/dev/null
-wait_for_policy 11 false 1800 >/dev/null
+wait_for_policy 10 false 1800 >/dev/null
 
 printf '%s\n' 'HBR-CHK-POLICY-012 revision exhaustion returns the current snapshot'
 call shell setPluginEnabled "$plugin_id" false | grep -qx 'ok'

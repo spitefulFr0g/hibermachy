@@ -887,11 +887,10 @@ Item {
       if (octets[0] === 0xEF && octets[1] === 0xBB && octets[2] === 0xBF) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
     }
     if (String(raw).charCodeAt(0) === 0xFEFF || String(raw).indexOf("\uFFFD") >= 0) { policyAccepted = false; policyReasonCode = "HBR-POLICY-ENCODING"; return }
+    if (policyWriteInFlight) return
     if (String(raw || "").trim() === "") {
-      policySnapshot = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
-      policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
-      policyAccepted = true
-      policyReasonCode = policyDirectoryWritable ? "HBR-POLICY-DISABLED" : "HBR-POLICY-PERSISTENCE"
+      policyAccepted = false
+      policyReasonCode = "HBR-POLICY-MALFORMED"
       return
     }
     var keys
@@ -910,14 +909,29 @@ Item {
       if (!value || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 1
         || typeof value.automaticPolicyEnabled !== "boolean" || !Number.isSafeInteger(value.idleDelaySeconds)
         || value.idleDelaySeconds < 300 || value.idleDelaySeconds > 86400) throw new Error("invalid policy")
+      if (policySnapshot && value.revision !== policySnapshot.revision) {
+        policyAccepted = false
+        policyReasonCode = "HBR-POLICY-REVISION-CONFLICT"
+        return
+      }
       var policyChanged = automaticPolicyChanged(policySnapshot, value)
-      var persistenceBlocked = policyReasonCode === "HBR-POLICY-PERSISTENCE"
+      if (policyChanged) {
+        if (value.revision === Number.MAX_SAFE_INTEGER) {
+          policyAccepted = false; policyReasonCode = "HBR-POLICY-REVISION-EXHAUSTED"; return
+        }
+        value.revision += 1
+      }
       var canonical = JSON.stringify({ version: 1, revision: value.revision,
         automaticPolicyEnabled: value.automaticPolicyEnabled, idleDelaySeconds: value.idleDelaySeconds }, null, 2) + "\n"
-      if (String(raw) !== canonical) policyFile.setText(canonical)
+      if (String(raw) !== canonical) {
+        pendingUserPolicy = value
+        policyWriteInFlight = true
+        policyAccepted = false
+        Qt.callLater(function() { policyFile.setText(canonical) })
+        return
+      }
       policySnapshot = value
-      policyReasonCode = !policyDirectoryWritable || persistenceBlocked
-        ? "HBR-POLICY-PERSISTENCE"
+      policyReasonCode = !policyDirectoryWritable ? "HBR-POLICY-PERSISTENCE"
         : (value.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED")
       if (policyChanged) requireFreshActivity()
     } catch (error) {
@@ -952,16 +966,18 @@ Item {
     var saved = policyFile.waitForJob()
     return JSON.stringify({ accepted: saved,
       reasonCode: saved ? "HBR-POLICY-SAVED" : "HBR-POLICY-PERSISTENCE",
-      policy: policyWriteInFlight ? policySnapshot : pendingUserPolicy })
+      policy: policySnapshot })
   }
 
   function resetUserPolicy(): string {
+    if (policyWriteInFlight) return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-UNAVAILABLE", policy: policySnapshot })
     if (policySnapshot && policySnapshot.revision === Number.MAX_SAFE_INTEGER)
       return JSON.stringify({ accepted: false, reasonCode: "HBR-POLICY-REVISION-EXHAUSTED", policy: policySnapshot })
-    policySnapshot = { version: 1, revision: (policySnapshot ? policySnapshot.revision + 1 : 1), automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
-    policyFile.setText(JSON.stringify(policySnapshot, null, 2) + "\n")
-    policyReasonCode = "HBR-POLICY-DISABLED"
-    return JSON.stringify({ accepted: true, reasonCode: "HBR-POLICY-RESET", policy: policySnapshot })
+    pendingUserPolicy = { version: 1, revision: (policySnapshot ? policySnapshot.revision + 1 : 1), automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
+    policyWriteInFlight = true
+    policyFile.setText(JSON.stringify(pendingUserPolicy, null, 2) + "\n")
+    var saved = policyFile.waitForJob()
+    return JSON.stringify({ accepted: saved, reasonCode: saved ? "HBR-POLICY-RESET" : "HBR-POLICY-PERSISTENCE", policy: policySnapshot })
   }
 
   function resetHistory(): string {
@@ -1353,11 +1369,22 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: root.loadUserPolicy(text(), data())
-    onLoadFailed: root.loadUserPolicy("")
+    onLoadFailed: function(error) {
+      if (error === FileViewError.FileNotFound && !root.policySnapshot && !root.policyWriteInFlight) {
+        root.pendingUserPolicy = { version: 1, revision: 1, automaticPolicyEnabled: false, idleDelaySeconds: 1800 }
+        root.policyWriteInFlight = true
+        root.policyAccepted = false
+        Qt.callLater(function() { if (root.pendingUserPolicy) policyFile.setText(JSON.stringify(root.pendingUserPolicy, null, 2) + "\n") })
+      } else {
+        root.policyAccepted = false
+        root.policyReasonCode = error === FileViewError.FileNotFound ? "HBR-POLICY-MISSING" : "HBR-POLICY-PERSISTENCE"
+      }
+    }
     onSaved: {
       var changed = root.automaticPolicyChanged(root.policySnapshot, root.pendingUserPolicy)
       if (root.pendingUserPolicy) {
         root.policySnapshot = root.pendingUserPolicy
+        root.policyAccepted = true
         root.policyReasonCode = root.pendingUserPolicy.automaticPolicyEnabled ? "HBR-POLICY-ENABLED" : "HBR-POLICY-DISABLED"
       }
       if (changed) root.requireFreshActivity()

@@ -12,11 +12,16 @@ case "$2" in
  disable) printf '{"plugins":[]}\n' > "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/shell.json";;
  add) mkdir -p "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy/plugin"
  touch "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy/plugin/Service.qml" "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy/plugin/Panel.qml"
- cp "$HBR_LIFECYCLE_MANIFEST" "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy/manifest.json";; update) [[ ${HBR_FAIL_UPDATE:-0} != 1 ]] || exit 1;; remove) rm -rf "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy";; esac
+ cp "$HBR_LIFECYCLE_MANIFEST" "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy/manifest.json";; update) [[ ${HBR_FAIL_UPDATE:-0} != 1 ]] || exit 1
+ installed="$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy"
+ mkdir -p "$installed/lifecycle" "$installed/packaging"
+ cp "$HBR_LIFECYCLE_SOURCE"/lifecycle/*.mjs "$installed/lifecycle/"
+ cp "$HIBERMACHY_LIFECYCLE_RECIPE_DIR/PKGBUILD" "$installed/packaging/PKGBUILD";; remove) rm -rf "$HIBERMACHY_LIFECYCLE_HOME/.config/omarchy/plugins/dev.hibermachy";; esac
 EOF
 cat > "$bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'build-cwd %s\n' "$PWD" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 printf 'makepkg %s\n' "$*" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 cat > "$HIBERMACHY_LIFECYCLE_COMMAND_DIR/hibermachy-policy-helper" <<'HELPER'
 #!/usr/bin/env bash
@@ -41,9 +46,10 @@ fi
 exit 2
 EOF
 chmod +x "$bin/sudo" "$bin/pacman"
-envbase=(HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="${fixture_home}" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_RECIPE_DIR="$recipe" HBR_LIFECYCLE_MANIFEST="$root/manifest.json")
+envbase=(HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="${fixture_home}" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_RECIPE_DIR="$recipe" HBR_LIFECYCLE_MANIFEST="$root/manifest.json" HBR_LIFECYCLE_SOURCE="$root")
 setup=$(env "${envbase[@]}" "$root/lifecycle/install" setup); jq -e '.kind == "accepted" and .activation == "disabled"' <<<"$setup" >/dev/null; grep -qx 'plugin add https://github.com/spitefulFr0g/hibermachy.git' "${fixture_home}/commands"
 env "${envbase[@]}" "$root/lifecycle/install" activate --confirm >/dev/null; update=$(env "${envbase[@]}" "$root/lifecycle/install" update); jq -e '.activation == "enabled"' <<<"$update" >/dev/null
+grep -Fx "build-cwd $fixture_home/.config/omarchy/plugins/dev.hibermachy/packaging" "$fixture_home/commands" > /dev/null
 set +e; failed=$(env HBR_FAIL_UPDATE=1 "${envbase[@]}" "$root/lifecycle/install" update 2>&1); code=$?; set -e; [[ $code -ne 0 ]]; grep -q HBR-LIFECYCLE-OMARCHY-FAILED <<<"$failed"
 jq -e '.plugins | length == 0' "$fixture_home/.config/omarchy/shell.json" > /dev/null
 jq -e '.previousActivation == true' "$fixture_home/.local/state/hibermachy/lifecycle-update.json" > /dev/null

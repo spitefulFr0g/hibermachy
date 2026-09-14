@@ -228,6 +228,22 @@ function update() {
   if (!pending) saveUpdateIntent(before);
   if (currentActivation) run("omarchy", ["plugin", "disable", "dev.hibermachy"]);
   run("omarchy", ["plugin", "update", "dev.hibermachy"]);
+  const updated = path.join(plugin, "lifecycle", "production.mjs");
+  const stat = exists(updated);
+  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error("HBR-UPDATE-INTERFACE-MISSING");
+  // Reload the reviewed code from the installed checkout. The old process may
+  // have been launched from a separate bootstrap clone and must not build it.
+  const childEnvironment = { ...process.env };
+  delete childEnvironment.HIBERMACHY_LIFECYCLE_RECIPE_DIR;
+  const next = spawnSync(process.execPath, [updated, "complete-update"], { stdio: "inherit", env: childEnvironment });
+  if (next.error) throw new Error("HBR-UPDATE-TRANSFER-FAILED");
+  process.exit(next.status ?? 1);
+}
+function completeUpdate() {
+  if (path.resolve(checkout) !== path.resolve(plugin)) throw new Error("HBR-UPDATE-CHECKOUT-MISMATCH");
+  const pending = readUpdateIntent();
+  if (!pending) throw new Error("HBR-UPDATE-STATE-MISSING");
+  const before = pending.previousActivation;
   if (!signedRecipeReady()) throw new Error("HBR-HELPER-IMMUTABLE-RELEASE-REQUIRED");
   run("makepkg", ["--syncdeps", "--install", "--cleanbuild"], recipeDirectory);
   checkInstalledComponents(true);
@@ -287,6 +303,6 @@ function uninstall(purge) {
   return { kind: "accepted", operation: purge ? "purge" : "uninstall", inventory: inventory() };
 }
 try {
-  const result = command === "status" ? inventory() : command === "setup" ? setup() : command === "activate" ? activate() : command === "update" ? update() : command === "disable" ? disable(false) : command === "remove" ? disable(true) : command === "uninstall" ? uninstall(false) : command === "purge" ? uninstall(true) : (() => { throw new Error("HBR-LIFECYCLE-COMMAND-UNKNOWN"); })();
+  const result = command === "status" ? inventory() : command === "setup" ? setup() : command === "activate" ? activate() : command === "update" ? update() : command === "complete-update" ? completeUpdate() : command === "disable" ? disable(false) : command === "remove" ? disable(true) : command === "uninstall" ? uninstall(false) : command === "purge" ? uninstall(true) : (() => { throw new Error("HBR-LIFECYCLE-COMMAND-UNKNOWN"); })();
   process.stdout.write(JSON.stringify(result) + "\n");
 } catch (error) { process.stderr.write(JSON.stringify({ kind: "refused", operation: command, reasonCode: error.message, inventory: inventory() }) + "\n"); process.exitCode = 1; }
