@@ -278,8 +278,8 @@ function matchingArrayEnd(source, start) {
 }
 
 const menuEntries = [
-  { id: "setup.hibermachy", value: { managedBy: "hibermachy", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" } },
-  { id: "system.hibermachy-staged-sleep", value: { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" } }
+  { id: "setup.hibermachy", value: { managedBy: "hibermachy", icon: "󰒲", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" } },
+  { id: "system.hibermachy-staged-sleep", value: { managedBy: "hibermachy", icon: "󰤄", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" } }
 ];
 function sameEntry(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
