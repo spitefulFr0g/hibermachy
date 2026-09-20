@@ -4,8 +4,8 @@ import path from "node:path";
 
 const ownedIds = ["setup.hibermachy", "system.hibermachy-staged-sleep"];
 const entries = {
-  "setup.hibermachy": { managedBy: "hibermachy", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" },
-  "system.hibermachy-staged-sleep": { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" }
+  "setup.hibermachy": { managedBy: "hibermachy", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" },
+  "system.hibermachy-staged-sleep": { managedBy: "hibermachy", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" }
 };
 
 function refuse(code) { throw new Error(code); }
