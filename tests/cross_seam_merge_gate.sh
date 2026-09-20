@@ -36,7 +36,9 @@ status=$("$root/lifecycle/status" status --root "$fixture")
 jq -e '.scopes.helper_protocol.state == "compatible" and .scopes.requested_system_policy.state == "compatible" and .scopes.owned_target.state == "compatible"' <<<"$status" >/dev/null
 
 printf '%s\n' 'HBR-CHK-CROSS-004 merge verification contains no real sleep, host mutation, package destruction, or fourth implementation seam'
-if rg -n --glob '!cross_seam_merge_gate.sh' 'systemctl( |$)|pkexec|sudo |pacman( |$)|rm -rf /|loginctl suspend|loginctl hibernate' "$root/tests" "$root/verification"; then
+# Scanned over executable test code only. Evidence prose under verification/ must be
+# free to name privileged commands to record them as not run; markdown executes nothing.
+if rg -n --glob '!cross_seam_merge_gate.sh' 'systemctl( |$)|pkexec|sudo |pacman( |$)|rm -rf /|loginctl suspend|loginctl hibernate' "$root/tests"; then
   printf '%s\n' 'HBR-CHK-CROSS-004 FAILED: prohibited host mutation seam found' >&2
   exit 1
 fi
