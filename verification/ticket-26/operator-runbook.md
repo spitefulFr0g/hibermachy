@@ -9,7 +9,13 @@ tree `8f3e33a03b1609d2957c63367a4a9c471b6e4ef6`, and source-archive SHA-256
 Changing shipped bits, public artifacts, or any bound checksum invalidates the
 run and requires a new candidate identity.
 
-The procedure is driven by `handoff/attended-release-625d5a2.sh`, which walks
+The procedure is driven by `handoff/attended-release-625d5a2.sh`, which is an
+operator handoff artifact rather than a tracked file. It reads the tracked
+tooling in `verification/ticket-26/`, so run it with this branch checked out,
+or point `HIBERMACHY_REPO` at a checkout that contains it. The script refuses
+to start if it cannot find the external checkpoint tool.
+
+The script walks
 the operator through every stage below, records results as they are observed,
 and stops before anything is published. This document is the specification that
 script implements; read it before running the script.

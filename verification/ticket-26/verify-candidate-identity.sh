@@ -26,14 +26,17 @@ actual_type=$(git -C "$repo" cat-file -t "$expected_commit" 2>/dev/null) \
   || fail "candidate commit object is unavailable"
 [[ "$actual_type" == commit ]] || fail "candidate object type is $actual_type, expected commit"
 
-actual_commit=$(git -C "$repo" rev-parse --verify "${expected_commit}^{commit}")
+actual_commit=$(git -C "$repo" rev-parse --verify "${expected_commit}^{commit}") \
+  || fail "cannot resolve the candidate commit"
 [[ "$actual_commit" == "$expected_commit" ]] || fail "commit mismatch: $actual_commit"
 
-actual_tree=$(git -C "$repo" rev-parse "${expected_commit}^{tree}")
+actual_tree=$(git -C "$repo" rev-parse "${expected_commit}^{tree}") \
+  || fail "cannot resolve the candidate tree"
 [[ "$actual_tree" == "$expected_tree" ]] || fail "tree mismatch: $actual_tree"
 
 actual_archive_sha256=$(git -C "$repo" archive --format=tar --prefix="$archive_prefix" \
-  "$expected_commit" | gzip -n -9 | sha256sum | awk '{print $1}')
+  "$expected_commit" | gzip -n -9 | sha256sum | awk '{print $1}') \
+  || fail "cannot reproduce the candidate archive digest"
 [[ "$actual_archive_sha256" == "$expected_archive_sha256" ]] \
   || fail "archive SHA-256 mismatch: $actual_archive_sha256"
 
