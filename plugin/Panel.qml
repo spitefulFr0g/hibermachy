@@ -446,6 +446,7 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
           Accessible.name: "Requested and effective system policy and latest request result"
+          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
         }
         PanelSeparator { width: parent.width }
         PanelSectionHeader { text: "Manual action" }

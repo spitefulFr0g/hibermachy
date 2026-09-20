@@ -89,6 +89,8 @@ assert_scope "$plugin_removed" helper_package compatible
 assert_scope "$plugin_removed" requested_system_policy compatible
 assert_scope "$plugin_removed" user_configuration_state compatible
 assert_scope "$plugin_removed" automatic_policy_enablement compatible
+assert_scope "$plugin_removed" helper_protocol incomplete
+jq -e '.scopes.helper_protocol.reasonCode == "HBR-LIFECYCLE-INCOMPLETE"' <<<"$plugin_removed" >/dev/null
 
 rm "$fixture_root/helper/package" "$fixture_root/helper/protocol"
 helper_only=$("$command_path" status --root "$fixture_root")
@@ -108,7 +110,7 @@ printf '%s\n' '{"entries":[{"id":"setup.hibermachy","label":"user-owned collisio
 partial=$("$command_path" status --root "$fixture_root")
 assert_scope "$partial" checkout missing
 assert_scope "$partial" helper_package missing
-assert_scope "$partial" helper_protocol mismatched
+assert_scope "$partial" helper_protocol incomplete
 assert_scope "$partial" menu_contribution colliding
 assert_scope "$partial" requested_system_policy unrecognized
 jq -e '.scopes.owned_target.state == "unrecognized"' <<<"$partial" >/dev/null

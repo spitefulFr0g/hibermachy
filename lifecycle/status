@@ -147,6 +147,12 @@ protocol_state() {
     checkout_release=$(jq -r '.version // "unknown"' "$root/plugin/manifest.json" 2>/dev/null || printf '%s' unknown)
     if [[ -n "$checkout_min" && -n "$checkout_max" ]] && awk -v hmin="$helper_min" -v hmax="$helper_max" -v cmin="$checkout_min" -v cmax="$checkout_max" 'BEGIN { exit !(hmin <= hmax && cmin <= cmax && hmin <= cmax && hmax >= cmin) }'; then
       scope compatible machine-wide 'Helper protocol overlaps the checkout protocol range.'
+    elif [[ ! -e "$manifest" ]]; then
+    jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
+      --arg helper_release "${helper_release:-unknown}" --arg checkout_release "$checkout_release" \
+      --argjson checkout_min "${checkout_min:-null}" --argjson checkout_max "${checkout_max:-null}" \
+      '. + {helperProtocolMin:$helper_min, helperProtocolMax:$helper_max, checkoutProtocolMin:$checkout_min, checkoutProtocolMax:$checkout_max, helperReleaseVersion:$helper_release, checkoutReleaseVersion:$checkout_release}' \
+      <<<"$(scope incomplete machine-wide 'No checkout is present to compare against; this is expected after plugin removal.')"
     else
     jq --argjson helper_min "${helper_min:-null}" --argjson helper_max "${helper_max:-null}" \
       --arg helper_release "${helper_release:-unknown}" --arg checkout_release "$checkout_release" \
