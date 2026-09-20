@@ -48,7 +48,7 @@ if rg -n 'command: \["/bin/sh"' "$root/plugin/Service.qml"; then
 fi
 
 printf '%s\n' 'HBR-CHK-STATIC-006 Requested/Effective policy comparison announces non-visually like its neighbors'
-announce_handler='onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }'
+announce_handler='onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }'
 announce_count=$(rg -Fc "$announce_handler" "$root/plugin/Panel.qml" || true)
 if [[ ${announce_count:-0} -ne 3 ]]; then
   printf '%s\n' "HBR-CHK-STATIC-006 FAILED: expected 3 Accessible.announce onTextChanged handlers (status summary, action result, requested/effective comparison), found ${announce_count:-0}" >&2

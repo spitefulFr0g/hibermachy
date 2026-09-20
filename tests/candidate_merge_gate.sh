@@ -17,6 +17,7 @@ run_gate() {
 run_gate TRACEABILITY "$root/tests/traceability_merge_gate.sh"
 run_gate CROSS_SEAM "$root/tests/cross_seam_merge_gate.sh"
 run_gate STATIC "$root/tests/static_merge_gate.sh"
+run_gate PANEL_ANNOUNCEMENT "$root/tests/panel_announcement.sh"
 run_gate POLICY_READBACK "$root/tests/policy_readback.sh"
 run_gate EVIDENCE_OBSERVER "$root/tests/evidence_observer.sh"
 run_gate SYSTEM_POLICY_DISPATCH "$root/tests/system_policy_dispatch.sh"

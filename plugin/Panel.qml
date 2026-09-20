@@ -432,7 +432,7 @@ Panel {
           font.pixelSize: Style.font.body
           wrapMode: Text.WordWrap
           Accessible.name: "Current operational status: " + text
-          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
+          onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }
         }
         Text {
           width: parent.width
@@ -446,7 +446,7 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
           Accessible.name: "Requested and effective system policy and latest request result"
-          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
+          onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }
         }
         PanelSeparator { width: parent.width }
         PanelSectionHeader { text: "Manual action" }
@@ -469,7 +469,7 @@ Panel {
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
-          onTextChanged: function(value) { if (visible && Accessible.announce) Accessible.announce(value, Accessible.Polite) }
+          onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }
           Accessible.name: "Latest action result: " + text
         }
         Button {
