@@ -175,13 +175,25 @@ contrast measures 11.56:1, passing AA and AAA; the single token falling below
 4.5:1 is never used for displayed text. A ten-item checklist has been prepared
 for one attended session.
 
-Announcement control flow is now covered by an executed regression,
-`HBR-CHK-PANEL-ANNOUNCE-001`, which lifts both announcing `Text` elements out of
-the shipped panel source and drives them through real QML binding evaluation on
+Announcement behaviour is now covered by two executed checks that divide the
+question cleanly.
+
+`HBR-CHK-PANEL-ANNOUNCE-001` lifts both announcing `Text` elements out of the
+shipped panel source and drives them through real QML binding evaluation on
 Qt 6.11.2. Only the theme singletons and the announcement sink are substituted,
 so declaration order is preserved. This establishes *which* announcements the
-panel attempts. It does not establish that any of them reach assistive
-technology.
+panel attempts, with what text, on which transitions.
+
+`HBR-CHK-PANEL-ANNOUNCE-002` establishes the transport: a QML
+`Accessible.announce` call is delivered to the accessibility bus as an
+`object:announcement` event carrying the announced text, observed through AT-SPI
+introspection on Qt 6.11.2 under Wayland. It requires a live session and is
+opt-in, so it does not run in the ordinary battery.
+
+Together these close the question the earlier revision of this document could
+not answer. What they do **not** establish is composition — the real panel
+inside the real shell — or that a screen reader presents any announcement
+usefully. No screen reader is installed on this host.
 
 **No accessibility sign-off is claimed.** Keyboard-only and assistive-technology
 verification requires an operator and has not occurred.
@@ -231,11 +243,11 @@ and `Accessible.Polite` resolves to `0`.
 Testing it is what exposed defect 3 above, so the concern was pointing at a real
 problem — just not the one stated.
 
-What remains genuinely unverified is narrower and unchanged: whether a call to
-`Accessible.announce` is delivered to a screen reader on this platform. That
-cannot be established without assistive technology attached, and it stays the
-first item on the attended checklist. No claim is made that any announcement is
-heard.
+The transport question that replaced it has since been answered too, by
+`HBR-CHK-PANEL-ANNOUNCE-002`: the announce call does reach the accessibility bus
+with its text intact. What remains is whether a screen reader presents it
+usefully, which requires one to be installed and an operator to listen. No claim
+is made that any announcement is heard.
 
 ## Recorded decision — host-mutation scan scope
 
@@ -272,8 +284,10 @@ Neither fix touches the helper source. On the successor candidate:
 ## Outstanding before this issue can close
 
 1. Attended accessibility session against the corrected panel — operator only.
-   Confirm first that a call to `Accessible.announce` reaches assistive
-   technology at all; the remaining checklist items assume it does.
+   The prerequisite transport question is now answered by
+   `HBR-CHK-PANEL-ANNOUNCE-002`, so the session starts at checklist item 1
+   (keyboard-only panel open) rather than at a blocking unknown. A screen
+   reader must be installed first; none is present on this host.
 2. AC2 determination — draft prepared at
    `verification/ticket-25-ac2-environment-determination.md`, sign-off block
    **unsigned**. Owner must select an option.

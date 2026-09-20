@@ -556,6 +556,13 @@ of the following has been performed; every line needs the owner physically
 present with a keyboard (and ideally a screen reader) in front of the real
 panel.
 
+Update 2026-09-20 — the prerequisite question is answered. This checklist was
+written assuming it was unknown whether `Accessible.announce` reaches assistive
+technology at all. `HBR-CHK-PANEL-ANNOUNCE-002` now demonstrates that a QML
+announce call is delivered to the accessibility bus as an `object:announcement`
+event with the announced text intact, on Qt 6.11.2 under Wayland. The transport
+works; the items below concern whether a screen reader presents it usefully.
+
 1. Open the panel using only the keyboard (no mouse) from a closed state.
 2. Tab/Shift-Tab (or the panel's arrow-key equivalent) through all 17 focus
    targets in the order listed above; confirm focus is always visible and
@@ -576,10 +583,11 @@ panel.
    draft)" state are both announced.
 7. With a screen reader running, apply a system policy that an administrator
    override will make differ from what was requested (or simulate via test
-   fixture) and confirm whether the Requested/Effective/Provenance text
-   change is actually heard — this static review found it is **not** wired
-   to `Accessible.announce` (see gap above); the owner should confirm this
-   in practice and decide whether it blocks daily use.
+   fixture) and confirm the Requested/Effective/Provenance text change is
+   actually heard. The gap this review originally recorded here — the
+   comparison text not being wired to `Accessible.announce` — was corrected on
+   2026-09-20 and is now covered by `HBR-CHK-PANEL-ANNOUNCE-001`. What is left
+   to confirm is that the screen reader speaks it.
 8. Repeat the whole panel at 150–200% text scale (via the shell's font-scale
    setting) and confirm no text is clipped or overlapping.
 9. Re-run the contrast check above against whatever theme is actually active
