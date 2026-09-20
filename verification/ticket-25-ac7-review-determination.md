@@ -2,9 +2,8 @@
 
 Issue: #25 (`23: Qualify one immutable candidate in clean-room gates`)
 Drafted: 2026-09-20
-Status: **draft — unsigned.** This document records a determination the owner
-must make. It is prepared, not made. Nothing below is in force until the
-sign-off block at the end is completed.
+Status: **determined 2026-09-20.** The sign-off block at the end is complete
+and this determination is in force.
 
 ## The criterion
 
@@ -77,11 +76,17 @@ confirmation that the helper binary is byte-identical.
 ## Sign-off
 
 ```
-Determination:  ______   (A / B / C)
-Rationale:      ____________________________________________
-Owner:          ____________________________________________
-Date:           ____________________________________________
+Determination:  A  (agent review satisfies AC7 for this release)
+Rationale:      Agent review is the owner's approved standing policy and
+                predates this issue. The review was adversarial, source-based,
+                and verified prior findings closed rather than citing them.
+                The human wording remains unmet and is stated, not glossed.
+Owner:          spitefulFr0g
+Date:           2026-09-20
 ```
 
-Until this block is completed, AC7 is open on its literal wording and no
-security certification is claimed.
+Recorded from the owner's explicit instruction during the 2026-09-20 working
+session. This is a determination entry, not a cryptographic signature.
+
+**In force.** AC7 is recorded as met by owner determination, not as met as
+written. No human review occurred and no security certification is claimed.

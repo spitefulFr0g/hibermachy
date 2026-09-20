@@ -16,8 +16,9 @@ in the two source ledgers named below, which remain the detailed record.
 - `verification/ticket-25-provenance-review.md` — AC1, AC6, AC7, AC5 precursor.
 - `verification/ticket-25-ac3-ac4-gates.md` — AC3, AC4.
 - `verification/native-machine-qualification.md` — prior existing-machine record.
-- `verification/ticket-25-ac2-environment-determination.md` — AC2 determination, **unsigned draft**.
-- `verification/ticket-25-ac7-review-determination.md` — AC7 determination, **unsigned draft**.
+- `verification/ticket-25-ac2-environment-determination.md` — AC2 determination, in force.
+- `verification/ticket-25-ac5-accessibility-determination.md` — AC5 determination, in force.
+- `verification/ticket-25-ac7-review-determination.md` — AC7 determination, in force.
 
 `verification/ticket-25-evidence.md` is **not** part of this issue. Its name is a
 collision with an older local ticket numbering (`Harden process boundaries`).
@@ -60,12 +61,12 @@ as current for the newer platform without a rerun.
 | AC | Subject | State |
 | --- | --- | --- |
 | 1 | Candidate identity binding | Satisfied for `2bb7cb3` |
-| 2 | Fresh profile / clean environment journeys | **Open** — substitute evidence only |
+| 2 | Fresh profile / clean environment journeys | **Determined unmet** — no clean environment exists |
 | 3 | Hostile privileged tests | Satisfied except two named exclusions |
 | 4 | Lifecycle journeys with scope inventories | Satisfied — nine journeys |
-| 5 | Accessibility sign-off | **Open** — precursor only, one defect |
+| 5 | Accessibility sign-off | **Determined unmet** — assistive tech out of scope |
 | 6 | Supply-chain evidence | Satisfied — no blocking advisory |
-| 7 | Independent security-aware review | **Open on the literal wording** |
+| 7 | Independent security-aware review | **Determined met by owner** — agent, not human |
 | 8 | Sanitized evidence | This document |
 
 ## AC3 — hostile privileged tests
@@ -170,33 +171,23 @@ path.
 
 ## AC5 — accessibility
 
-Static analysis plus one executed behavioural check. Foreground-on-background
-contrast measures 11.56:1, passing AA and AAA; the single token falling below
-4.5:1 is never used for displayed text. A ten-item checklist has been prepared
-for one attended session.
+**Determined: assistive technology out of scope; AC5 accepted as unmet.** See
+`verification/ticket-25-ac5-accessibility-determination.md`.
 
-Announcement behaviour is now covered by two executed checks that divide the
-question cleanly.
-
-`HBR-CHK-PANEL-ANNOUNCE-001` lifts both announcing `Text` elements out of the
-shipped panel source and drives them through real QML binding evaluation on
-Qt 6.11.2. Only the theme singletons and the announcement sink are substituted,
-so declaration order is preserved. This establishes *which* announcements the
+Evidence is automated and static only. No operator session occurred and none is
+scheduled. `HBR-CHK-PANEL-ANNOUNCE-001` establishes which announcements the
 panel attempts, with what text, on which transitions.
+`HBR-CHK-PANEL-ANNOUNCE-002` establishes that such a call reaches the
+accessibility bus with its text intact; it needs no screen reader and is opt-in
+behind `HBR_RUN_HOSTED=1`. Contrast measures 11.56:1, passing AA and AAA.
 
-`HBR-CHK-PANEL-ANNOUNCE-002` establishes the transport: a QML
-`Accessible.announce` call is delivered to the accessibility bus as an
-`object:announcement` event carrying the announced text, observed through AT-SPI
-introspection on Qt 6.11.2 under Wayland. It requires a live session and is
-opt-in, so it does not run in the ordinary battery.
+Keyboard-only navigation, confirmation focus behaviour, authentication focus
+return, text scaling, and screen-reader presentation are all unevidenced. The
+first four are unevidenced because no operator session is scheduled; the last is
+out of scope.
 
-Together these close the question the earlier revision of this document could
-not answer. What they do **not** establish is composition — the real panel
-inside the real shell — or that a screen reader presents any announcement
-usefully. No screen reader is installed on this host.
-
-**No accessibility sign-off is claimed.** Keyboard-only and assistive-technology
-verification requires an operator and has not occurred.
+**No accessibility sign-off is claimed, and the panel must not be described as
+accessible or screen-reader tested.**
 
 ## Defects found — candidate superseded
 
@@ -276,25 +267,24 @@ Neither fix touches the helper source. On the successor candidate:
 - AC6 and AC7 helper findings carry forward on unchanged helper source, but the
   package checksum and archive provenance must be re-recorded.
 - AC4 must be rerun; defect 1 is in the lifecycle status path it exercises.
-- AC5's precursor must be re-checked against the corrected panel;
-  `HBR-CHK-PANEL-ANNOUNCE-001` reruns as part of the candidate gate.
+- AC5's automated checks rerun as part of the candidate gate; no operator
+  evidence exists to carry forward.
 - AC3's battery targets the helper binary and carries forward if that binary is
   byte-identical; this must be confirmed rather than assumed.
 
 ## Outstanding before this issue can close
 
-1. Attended accessibility session against the corrected panel — operator only.
-   The prerequisite transport question is now answered by
-   `HBR-CHK-PANEL-ANNOUNCE-002`, so the session starts at checklist item 1
-   (keyboard-only panel open) rather than at a blocking unknown. A screen
-   reader must be installed first; none is present on this host.
-2. AC2 determination — draft prepared at
-   `verification/ticket-25-ac2-environment-determination.md`, sign-off block
-   **unsigned**. Owner must select an option.
-3. AC7 determination — draft prepared at
-   `verification/ticket-25-ac7-review-determination.md`, sign-off block
-   **unsigned**. Owner must select an option.
-4. Re-cut, re-sign and re-verify the successor candidate.
+All three open criteria now have determinations in force, so no decision remains
+outstanding. What remains is mechanical:
+
+1. Re-cut the successor candidate: new commit, new source archive, new checksum,
+   new helper-package build and checksum.
+2. Owner signs the archive with the recorded key and the signature is verified
+   against it.
+3. Rerun the candidate gate against the signed bundle and record the result.
+4. Update this document with the successor identity, then close #25 noting that
+   AC2 and AC5 were qualified without, and AC7 met by owner determination rather
+   than as written.
 
 No release has been published, no branch has been pushed, and no gate is marked
 passed that did not run.

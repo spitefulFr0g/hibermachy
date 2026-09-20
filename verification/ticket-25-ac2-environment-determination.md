@@ -2,9 +2,8 @@
 
 Issue: #25 (`23: Qualify one immutable candidate in clean-room gates`)
 Drafted: 2026-09-20
-Status: **draft — unsigned.** This document records a determination the owner
-must make. It is prepared, not made. Nothing below is in force until the
-sign-off block at the end is completed.
+Status: **determined 2026-09-20.** The sign-off block at the end is complete
+and this determination is in force.
 
 ## The criterion
 
@@ -80,11 +79,18 @@ is consistent with how this project has treated every other shortfall.
 ## Sign-off
 
 ```
-Determination:  ______   (A / B / C)
-Rationale:      ____________________________________________
-Owner:          ____________________________________________
-Date:           ____________________________________________
+Determination:  A  (accept the gap and qualify without AC2)
+Rationale:      No clean verified environment exists or can be obtained for this
+                project. Option A is the only one reachable without new
+                hardware, and the only one that leaves the criterion openly
+                unmet rather than partially papered over.
+Owner:          spitefulFr0g
+Date:           2026-09-20
 ```
 
-Until this block is completed, AC2 is open and no clean-room qualification is
-claimed anywhere in this repository.
+Recorded from the owner's explicit instruction during the 2026-09-20 working
+session. This is a determination entry, not a cryptographic signature.
+
+**In force.** AC2 is recorded as accepted-unmet. The rootless battery must never
+be described as clean-room, and the release claims no verified behaviour on any
+installation other than the one tested.

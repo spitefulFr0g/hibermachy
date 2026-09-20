@@ -556,12 +556,14 @@ of the following has been performed; every line needs the owner physically
 present with a keyboard (and ideally a screen reader) in front of the real
 panel.
 
-Update 2026-09-20 — the prerequisite question is answered. This checklist was
-written assuming it was unknown whether `Accessible.announce` reaches assistive
-technology at all. `HBR-CHK-PANEL-ANNOUNCE-002` now demonstrates that a QML
-announce call is delivered to the accessibility bus as an `object:announcement`
-event with the announced text intact, on Qt 6.11.2 under Wayland. The transport
-works; the items below concern whether a screen reader presents it usefully.
+Update 2026-09-20 — **this checklist is superseded and will not be walked.**
+The owner removed assistive-technology verification from scope and accepted AC5
+as unmet; see `ticket-25-ac5-accessibility-determination.md`. Items 4, 5, 6, 7
+and 10 below require a screen reader and are **out of scope**. Items 1, 2, 3, 8
+and 9 need only a keyboard and remain unevidenced, but no session is scheduled.
+
+Retained as a record of what was identified, not as pending work. Nothing below
+is an obligation on this release.
 
 1. Open the panel using only the keyboard (no mouse) from a closed state.
 2. Tab/Shift-Tab (or the panel's arrow-key equivalent) through all 17 focus
