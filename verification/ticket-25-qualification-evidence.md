@@ -2,10 +2,12 @@
 
 Issue: #25 (`23: Qualify one immutable candidate in clean-room gates`)
 Parent: #2
-Candidate under evidence: `2bb7cb344e2330799ddb6713d58b735eb5a6de4c`
+Candidate under evidence: the successor to `2bb7cb3`, identified in the
+candidate manifest described under *Candidate identity* below.
 Date of this consolidation: 2026-09-20 (revised same day)
-Status: **qualification remains open**. This document is the sanitized AC8
-roll-up of the evidence gathered to date. It closes no gate by itself.
+Status: **all criteria resolved — three by determination, not by evidence.**
+This document is the sanitized AC8 roll-up. It records what was verified, what
+was determined, and what is unclaimed.
 
 This file excludes identity data, absolute filesystem paths, raw configuration
 content, and unrestricted logs, as AC8 requires. Per-check command output lives
@@ -25,19 +27,43 @@ collision with an older local ticket numbering (`Harden process boundaries`).
 
 ## Candidate identity
 
+The successor candidate is the commit in which this revision of this file is
+recorded. A file cannot contain its own archive checksum, so the identity
+bundle is recorded beside the artifacts in the candidate manifest
+`handoff/candidate-<short>/candidate.json`, which is the authoritative record of:
+
+| Element | Source |
+| --- | --- |
+| Commit and source tree | manifest |
+| Signed archive SHA-256 | manifest |
+| Detached signature SHA-256 | manifest |
+| Helper package SHA-256 | manifest |
+| Signing key fingerprint | `0B1C5414F8D18F8B6AA78957335FEBC82DB247EC` |
+
+The archive is produced deterministically from the commit with
+`git archive --format=tar --prefix=hibermachy-helper-0.1.0/ <commit>` piped
+through `gzip -n -9`, so any party holding the commit can regenerate it
+byte-for-byte and confirm the recorded checksum.
+
+`main` is an ancestor of the candidate commit. **The identity holds only if the
+branch is fast-forwarded.** A merge commit would create a different commit, and
+under AC1 that is a different candidate with no mapped evidence.
+
+### Superseded predecessor
+
 | Element | Value |
 | --- | --- |
 | Commit | `2bb7cb344e2330799ddb6713d58b735eb5a6de4c` |
 | Source tree | `7b034b105f44238f914ed2d7c758248121f8c739` |
 | Signed archive SHA-256 | `09180240e9b038dfb77048895d752b6fc7dbda32548ed6a48c9fe7d5fdb74264` |
 | Helper package SHA-256 | `b25a35a31f81e1cbc461d9bb6c32782988ad1234773954dabefba50b0ecf589a` |
-| Installed binary SHA-256 | `be889db04d2d4f7730d329e38c7886bddb967d1866293ba304a0e0a90568c22a` |
 | Signing key fingerprint | `0B1C5414F8D18F8B6AA78957335FEBC82DB247EC` |
 
-Re-verified 2026-09-20: the detached signature validates against the recorded
-fingerprint, both checksums match, and the extracted archive is byte-identical
-to the commit's tree. The archive is therefore bound to that commit, not merely
-labelled with it.
+Re-verified 2026-09-20 before supersession: the detached signature validated
+against the recorded fingerprint, both checksums matched, and the extracted
+archive was byte-identical to the commit's tree. Three defects were then fixed,
+which under AC1 invalidated this identity. Evidence mapped to it carries forward
+only where explicitly stated below.
 
 ## Environment
 
