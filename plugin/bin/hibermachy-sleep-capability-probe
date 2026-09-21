@@ -3,6 +3,11 @@
 
 const probe = await import("./native-probe-lib.cjs");
 
+// Emitted before the capability gate and never gated on it. The lid-close action
+// is a diagnostic: it must neither depend on sleep executability nor withhold
+// itself when sleep executability is unreadable.
+process.stdout.write("LidCloseAction=" + (probe.lidCloseAction(probe.nativeRun) || "indeterminate") + "\n");
+
 const result = probe.evaluateCapability({ run: probe.nativeRun, read: probe.nativeRead });
 if (!result) process.exit(1);
 for (const key of ["CanSuspend", "CanHibernate", "CanSuspendThenHibernate", "BlockInhibited", "BootId"])

@@ -87,6 +87,42 @@ const malformedCapability = probe.evaluateCapability({ ...adapter, run(command, 
   return command === probe.BUSCTL && args.includes("CanSuspend") ? response('{"type":"s","data":["challenge"]}') : run(command, args);
 } });
 assert.equal(malformedCapability, null);
+
+function lidRun(reply) {
+  return (command, args) => command === probe.BUSCTL && args.includes("HandleLidSwitch") ? reply : run(command, args);
+}
+function lidReply(data) { return response(JSON.stringify({ type: "s", data })); }
+
+// Every logind value maps into project vocabulary; anything outside it is
+// reported as "other" rather than guessed at.
+for (const [observed, classified] of [
+  ["ignore", "do-nothing"], ["lock", "lock"], ["suspend", "suspend"],
+  ["hibernate", "hibernate"], ["suspend-then-hibernate", "staged-sleep"],
+  ["poweroff", "other"], ["reboot", "other"], ["halt", "other"],
+  ["kexec", "other"], ["hybrid-sleep", "other"], ["factory-reset", "other"]
+]) assert.equal(probe.lidCloseAction(lidRun(lidReply(observed))), classified, observed);
+
+// An unreadable or untrustworthy observation is indeterminate, never a guess.
+for (const reply of [
+  response("", 1),
+  response("not json"),
+  lidReply(["suspend"]),
+  lidReply(""),
+  lidReply("suspend hibernate"),
+  lidReply("Suspend"),
+  lidReply("9suspend"),
+  response(JSON.stringify({ type: "b", data: true }))
+]) assert.equal(probe.lidCloseAction(lidRun(reply)), null);
+
+// The guarantee that makes this safe to ship: a failed lid observation leaves
+// sleep executability and the logind runtime contract untouched, so a broken
+// diagnostic can never disarm staged sleep.
+const lidBroken = { ...adapter, run: lidRun(response("", 1)) };
+assert.equal(probe.lidCloseAction(lidBroken.run), null);
+assert.deepEqual(probe.evaluateCapability(lidBroken), capability);
+assert.equal(probe.evaluateContract(lidBroken).logind, true);
+assert.equal(probe.evaluateContract(lidBroken).compatible, true);
 NODE
 
 printf '%s\n' 'HBR-CHK-NATIVE-PROBES-001 injected native transport rejects malformed results and fails closed'
+printf '%s\n' 'HBR-CHK-NATIVE-PROBES-002 lid-close action classifies into project vocabulary and never affects readiness'

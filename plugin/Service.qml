@@ -60,6 +60,7 @@ Item {
   property var requestedSystemPolicy: null
   property var effectiveSystemPolicy: null
   property var systemPolicyProvenance: []
+  property string lidCloseAction: ""
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
   property string systemPolicyMutation: ""
@@ -132,6 +133,9 @@ Item {
     ,requestedSystemPolicy: requestedSystemPolicy
     ,effectiveSystemPolicy: effectiveSystemPolicy
     ,systemPolicyProvenance: systemPolicyProvenance
+    ,lidCloseAction: lidCloseAction || "indeterminate"
+    ,lidCloseActionReasonCode: lidCloseActionReasonCode()
+    ,lidCloseActionReachesHibernation: lidCloseActionReachesHibernation()
     ,systemPolicyReasonCode: systemPolicyReasonCode
     ,lastSystemPolicyMutationResult: lastSystemPolicyMutationResult
     ,systemPolicyReadiness: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready"
@@ -288,6 +292,26 @@ Item {
     if (lastObservation.stagedSleepExecutable) return "staged sleep executable"
     if (lastObservation.suspendExecutable) return "suspend fallback available"
     return "no suspend or staged sleep executable"
+  }
+
+  // Diagnostic only. Deliberately consumed by no readiness determination: what the
+  // lid does is independent of whether Hibermachy can sleep the machine, and an
+  // unreadable lid observation must never disarm staged sleep.
+  function lidCloseActionReasonCode(): string {
+    switch (lidCloseAction) {
+    case "staged-sleep": return "HBR-LID-STAGED-SLEEP"
+    case "hibernate": return "HBR-LID-HIBERNATE"
+    case "suspend": return "HBR-LID-SUSPEND-ONLY"
+    case "lock": case "do-nothing": return "HBR-LID-NO-SLEEP"
+    case "other": return "HBR-LID-OTHER"
+    default: return "HBR-LID-INDETERMINATE"
+    }
+  }
+
+  // Only staged sleep consumes the hibernate delay. A direct hibernate reaches
+  // hibernation without it; everything else never reaches hibernation at all.
+  function lidCloseActionReachesHibernation(): bool {
+    return lidCloseAction === "staged-sleep" || lidCloseAction === "hibernate"
   }
 
   function activeBlocker(): string {
@@ -1213,6 +1237,11 @@ Item {
         var pair = line.split("=")
         if (pair.length === 2) values[pair[0]] = pair[1].trim()
       })
+      // simulatedBoolean returns its fallback outside test mode, so production
+      // reaches "indeterminate" only from a genuinely unreadable observation.
+      var observedLid = root.simulatedBoolean("HIBERMACHY_SIM_LID_FAILURE", false)
+        ? "indeterminate" : String(values.LidCloseAction || "indeterminate")
+      root.lidCloseAction = observedLid === "indeterminate" ? "" : observedLid
       root.sleepCapabilityProbeHealthy = exitCode === 0
         && values.CanSuspend !== undefined && values.CanHibernate !== undefined
         && values.CanSuspendThenHibernate !== undefined && values.BlockInhibited !== undefined
