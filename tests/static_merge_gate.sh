@@ -7,6 +7,8 @@ shell_files=(
   "$root"/lifecycle/status
   "$root"/lifecycle/uninstall
   "$root"/packaging/hibermachy-helper.install
+  "$root"/hardware/iptsd/manage
+  "$root"/hardware/iptsd/hibermachy-iptsd-guard
 )
 
 printf '%s\n' 'HBR-CHK-STATIC-001 JSON, shell, and whitespace validation'
@@ -15,7 +17,7 @@ node -e 'for (const file of process.argv.slice(1)) JSON.parse(require("fs").read
 for file in "${shell_files[@]}"; do
   bash -n "$file"
 done
-if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/packaging" "$root/tests" "$root/verification"; then
+if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/packaging" "$root/tests" "$root/verification" "$root/hardware"; then
   printf '%s\n' 'HBR-CHK-STATIC-001 FAILED: trailing whitespace' >&2
   exit 1
 fi

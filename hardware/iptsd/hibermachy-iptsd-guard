@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Managed by Hibermachy opt-in IPTS workaround. Installed as root-owned code.
+set -euo pipefail
+PATH=/usr/bin:/bin
+export PATH
+
+state=/run/hibermachy-iptsd
+mask=/run/systemd/system/iptsd@.service
+marker=$state/mask-owned
+
+fail() { printf 'hibermachy-iptsd: %s\n' "$*" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || fail 'must run as root'
+[[ $# -eq 1 && ( $1 == hold || $1 == restore ) ]] || fail 'expected hold or restore'
+[[ -d $state && ! -L $state && $(stat -c '%u:%a' "$state") == 0:700 ]] || fail 'missing or unsafe systemd runtime directory'
+
+restore() {
+  [[ -f $marker && ! -L $marker ]] || return 0
+  # A changed mask belongs to the administrator. Do not remove it or restart
+  # the daemon through it. ExecStopPost failure is visible in the journal.
+  [[ -L $mask && $(readlink "$mask") == /dev/null ]] || fail 'owned mask changed; leaving it for inspection'
+  rm -- "$mask"
+  systemctl daemon-reload
+  rm -- "$marker"
+  timeout --kill-after=2 15 iptsd-systemd -- start || fail 'mask removed, but touch daemon restart failed or timed out'
+  # The packaged discovery helper also returns success when no device exists.
+  # Allow the newly started process to exec before checking actual restoration.
+  for (( attempt = 0; attempt < 20; attempt++ )); do
+    if pgrep -x iptsd >/dev/null; then
+      printf 'hibermachy-iptsd: touch daemon running again after staged sleep\n'
+      return 0
+    fi
+    sleep 0.1
+  done
+  fail 'mask removed, but no touch daemon is running after restart'
+}
+
+hold() {
+  # Literal instances anywhere in the manager's search path bypass a template
+  # mask. Permit only the packaged template; preserve every custom unit.
+  local unit_paths directory file
+  unit_paths=$(systemctl show --property=UnitPath --value)
+  [[ -n $unit_paths ]] || fail 'could not inspect systemd unit search paths'
+  local -a directories
+  read -r -a directories <<< "$unit_paths"
+  for directory in "${directories[@]}"; do
+    [[ $directory == /* ]] || fail 'unexpected systemd unit search path'
+    for file in "$directory"/iptsd@*.service; do
+      [[ -e $file || -L $file ]] || continue
+      [[ $file == /usr/lib/systemd/system/iptsd@.service && -f $file && ! -L $file ]] || fail "existing unit override or mask: $file"
+    done
+  done
+  [[ ! -e $marker && ! -L $marker ]] || fail 'unexpected ownership marker'
+  command -v iptsd-systemd >/dev/null || fail 'iptsd-systemd is unavailable'
+  # ln without -f refuses collisions atomically. Record the inode so a later
+  # administrator replacement is not mistaken for the mask created here.
+  ln -s /dev/null "$mask"
+  stat -c '%d:%i' "$mask" > "$marker"
+  systemctl daemon-reload
+  timeout --kill-after=2 15 systemctl stop 'iptsd@*.service' || fail 'could not stop touch daemon; refusing staged sleep'
+  if pgrep -x iptsd >/dev/null; then
+    fail 'touch daemon still running; refusing staged sleep'
+  else
+    [[ $? -eq 1 ]] || fail 'could not check touch daemon processes; refusing staged sleep'
+  fi
+  printf 'hibermachy-iptsd: touch daemon stopped and blocked for staged sleep\n'
+}
+
+if [[ $1 == hold ]]; then
+  hold
+else
+  if [[ -f $marker && ! -L $marker ]]; then
+    [[ -L $mask && $(stat -c '%d:%i' "$mask") == "$(cat "$marker")" ]] || fail 'owned mask replaced; leaving it for inspection'
+  fi
+  restore
+fi

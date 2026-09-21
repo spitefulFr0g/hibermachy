@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Explicit administrator installation; never called by normal plugin setup.
+set -euo pipefail
+PATH=/usr/bin:/bin
+export PATH
+source_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+guard=/usr/local/libexec/hibermachy-iptsd-guard
+dropin=/etc/systemd/system/systemd-suspend-then-hibernate.service.d/90-hibermachy-iptsd.conf
+state=/run/hibermachy-iptsd
+
+fail() { printf 'hibermachy-iptsd: %s\n' "$*" >&2; exit 1; }
+[[ $# -eq 1 && ( $1 == install || $1 == remove || $1 == status ) ]] || fail 'usage: manage install|status|remove'
+
+if [[ $1 == status ]]; then
+  if [[ -f $guard && ! -L $guard && -f $dropin && ! -L $dropin ]] &&
+     cmp -s "$source_dir/hibermachy-iptsd-guard" "$guard" &&
+     cmp -s "$source_dir/90-hibermachy-iptsd.conf" "$dropin"; then
+    printf 'IPTS staged-sleep workaround installed (matches this checkout).\n'
+  elif [[ ! -e $guard && ! -L $guard && ! -e $dropin && ! -L $dropin ]]; then
+    printf 'IPTS staged-sleep workaround not installed.\n'
+  else
+    fail 'partial or modified installation; inspect files before changing them'
+  fi
+  exit 0
+fi
+
+[[ $EUID -eq 0 ]] || fail 'run install/remove with sudo'
+# This installer is intended for an idle, attended machine. Never alter a running
+# transaction or clear its runtime mask.
+service_state=$(systemctl show --value -p ActiveState systemd-suspend-then-hibernate.service)
+[[ $service_state == inactive || $service_state == failed ]] || fail 'staged-sleep service is busy'
+[[ ! -e $state/mask-owned && ! -L $state/mask-owned ]] || fail 'active or interrupted guard; inspect its journal first'
+
+safe_destination() {
+  local destination=$1 source=$2 parent
+  parent=$(dirname -- "$destination")
+  while [[ $parent != / ]]; do
+    [[ ! -L $parent ]] || fail "symlinked parent: $parent"
+    if [[ -e $parent ]]; then
+      [[ -d $parent && $(stat -c %u "$parent") == 0 ]] || fail "unsafe parent: $parent"
+      local mode
+      mode=$(stat -c %a "$parent")
+      (( (8#$mode & 0022) == 0 )) || fail "writable parent: $parent"
+    fi
+    parent=$(dirname -- "$parent")
+  done
+  if [[ -e $destination || -L $destination ]]; then
+    [[ -f $destination && ! -L $destination && $(stat -c '%u:%h' "$destination") == 0:1 ]] || fail "unsafe destination: $destination"
+    cmp -s "$source" "$destination" || fail "modified or different-version destination: $destination"
+  fi
+}
+safe_destination "$guard" "$source_dir/hibermachy-iptsd-guard"
+safe_destination "$dropin" "$source_dir/90-hibermachy-iptsd.conf"
+
+if [[ $1 == install ]]; then
+  command -v iptsd-systemd >/dev/null || fail 'install iptsd first'
+  [[ -f /usr/lib/systemd/system/iptsd@.service ]] || fail 'iptsd systemd template is missing'
+  install -Dm755 -o root -g root "$source_dir/hibermachy-iptsd-guard" "$guard"
+  install -Dm644 -o root -g root "$source_dir/90-hibermachy-iptsd.conf" "$dropin"
+else
+  rm -f -- "$dropin" "$guard"
+fi
+systemctl daemon-reload
+printf 'IPTS workaround %s complete; no sleep requested.\n' "$1"
