@@ -58,3 +58,10 @@ module state and command adapters. It covers timeout with completed removal,
 ordinary suspend and hibernate, absent modules, reload retries and failures,
 and preservation of recovery state. No real driver or sleep action is invoked.
 These checks do not replace hardware validation after installation.
+
+
+An attended Surface Pro 4 test on 2026-09-21 confirmed suspend at 21:21:18,
+hibernation at 21:36:18, and resume at 21:43:22 (America/Denver). The installed
+hook matched this source, logged driver restoration after both steps, and
+NetworkManager reconnected at 21:43:31 without a radio toggle. This records one
+successful hardware cycle; it does not complete the separate release gate.
