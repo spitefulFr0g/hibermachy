@@ -1,0 +1,54 @@
+#!/bin/bash
+# Opt-in Surface/Marvell workaround. Install as a root-owned system-sleep hook.
+set -u
+export PATH=/usr/bin:/bin
+
+case ${SYSTEMD_SLEEP_ACTION:-${2:-}} in
+  suspend|hibernate|suspend-after-failed-hibernate) ;;
+  *) exit 0 ;;
+esac
+
+module=/sys/module/mwifiex_pcie
+marker=/run/mwifiex-unloaded-for-hibernate
+log() { /usr/bin/logger -t mwifiex-hibernate -- "$*"; }
+unload() { /usr/bin/timeout --kill-after=2 10 /usr/bin/modprobe -r mwifiex_pcie; }
+load() { /usr/bin/timeout --kill-after=2 20 /usr/bin/modprobe mwifiex_pcie; }
+
+case ${1:-} in
+  pre)
+    # Keep any outstanding restoration obligation, even if an earlier unload
+    # timed out after removing the module. No marker means no ownership.
+    [[ -d $module || -f $marker ]] || exit 0
+    if ! /usr/bin/touch "$marker"; then
+      log "cannot record Wi-Fi restoration; leaving driver untouched"
+      exit 1
+    fi
+    if [[ -d $module ]] && ! unload; then
+      log "driver unload failed or timed out; restoration remains required"
+      exit 1
+    fi
+    log "Wi-Fi driver held for ${SYSTEMD_SLEEP_ACTION:-${2:-}}"
+    ;;
+  post)
+    [[ -f $marker ]] || exit 0
+    # A failed pre-unload can leave the module loaded but unhealthy. Retry the
+    # removal before loading so a no-op modprobe cannot masquerade as recovery.
+    for attempt in 1 2 3; do
+      if [[ -d $module ]] && ! unload; then
+        log "restoration attempt $attempt: driver still cannot unload"
+      elif load && [[ -d $module ]]; then
+        if ! /usr/bin/rm -f "$marker"; then
+          log "driver loaded, but recovery marker could not be cleared"
+          exit 1
+        fi
+        log "Wi-Fi driver restored after ${SYSTEMD_SLEEP_ACTION:-${2:-}}"
+        exit 0
+      else
+        log "restoration attempt $attempt: driver reload failed"
+      fi
+      [[ $attempt == 3 ]] || /usr/bin/sleep 1
+    done
+    log "Wi-Fi restoration failed; recovery marker retained at $marker"
+    exit 1
+    ;;
+esac
