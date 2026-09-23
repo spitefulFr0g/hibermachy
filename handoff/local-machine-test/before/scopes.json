@@ -1,0 +1,20 @@
+{
+  "shell.json": {
+    "existed": true
+  },
+  "menu.jsonc": {
+    "existed": true
+  },
+  "user-configuration": {
+    "existed": false
+  },
+  "outcome-state": {
+    "existed": false
+  },
+  "plugin-checkout": {
+    "existed": false
+  },
+  "system-policy": {
+    "existed": false
+  }
+}

@@ -1,0 +1,6 @@
+pre_remove() {
+  # Pacman removal is already an administrator-authorized package operation.
+  # Repeat the helper's narrow, recognized-target reset as defense in depth.
+  # A scriptlet failure must not make pacman report that package removal aborted.
+  /usr/libexec/hibermachy-policy-helper reset || :
+}

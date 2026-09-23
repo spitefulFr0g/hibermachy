@@ -1,0 +1,18 @@
+pkgbase = hibermachy-helper
+	pkgdesc = Authenticated one-shot helper for Hibermachy requested system policy
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/spitefulFr0g/hibermachy
+	install = hibermachy-helper.install
+	arch = x86_64
+	license = MIT
+	makedepends = rust
+	depends = glibc
+	depends = polkit
+	source = hibermachy-helper-0.1.0.tar.gz::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.0/hibermachy-helper-0.1.0.tar.gz
+	source = hibermachy-helper-0.1.0.tar.gz.sig::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.0/hibermachy-helper-0.1.0.tar.gz.sig
+	validpgpkeys = __RELEASE_SIGNING_KEY__
+	sha512sums = __RELEASE_SHA512__
+	sha512sums = __RELEASE_SIGNATURE_SHA512__
+
+pkgname = hibermachy-helper

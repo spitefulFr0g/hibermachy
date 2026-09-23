@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+const [command, ...args] = process.argv.slice(2);
+const rootIndex = args.indexOf("--root");
+const root = rootIndex >= 0 ? args[rootIndex + 1] : "";
+
+if (!root) {
+  const production = path.join(path.dirname(new URL(import.meta.url).pathname), "production.mjs");
+  const result = spawnSync(process.execPath, [production, command, ...args], { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
+const install = path.join(path.dirname(new URL(import.meta.url).pathname), "install");
+
+function inventory() {
+  const result = spawnSync(path.join(path.dirname(install), "status"), ["status", "--root", root], { encoding: "utf8" });
+  try { return JSON.parse(result.stdout); } catch { return { schemaVersion: 1, actionable: true, unavailable: true }; }
+}
+function fail(reasonCode) {
+  process.stderr.write(`${JSON.stringify({ kind: "refused", operation: command === "disable" ? "disable" : "plugin-removal", reasonCode, inventory: inventory() })}\n`);
+  process.exitCode = 1;
+}
+function regular(file) { try { return fs.lstatSync(path.join(root, file)).isFile(); } catch { return false; } }
+function record(phase) { fs.writeFileSync(path.join(root, "lifecycle-state.json"), `${JSON.stringify({ schemaVersion: 1, operation: command === "disable" ? "disable" : "plugin-removal", phase })}\n`); }
+function fixtureAccepted(file, required) { return regular(file) && required.every((entry) => fs.readFileSync(path.join(root, file), "utf8").includes(entry)); }
+function warnings(document) {
+  const result = [
+    "This operation changes plugin lifecycle only; it is not Hibermachy uninstall.",
+    "Checkout, menu contribution, user configuration/state, helper package, and requested system policy are inventoried independently."
+  ];
+  if (document.scopes?.requested_system_policy?.state === "compatible")
+    result.push("Machine-wide requested system policy remains effective; reset it through the separate authenticated policy workflow.");
+  return result;
+}
+function result(operation) {
+  const currentInventory = inventory();
+  return { kind: "accepted", operation, activation: "disabled", unloadedKinds: ["service", "panel"], nativeDelegation: "quattro", policyMutation: false, inventory: currentInventory, warnings: warnings(currentInventory) };
+}
+function decline(operation) {
+  const currentInventory = inventory();
+  process.stderr.write(`${JSON.stringify({
+    kind: "declined", operation,
+    activation: currentInventory.scopes?.activation?.enabled === true ? "enabled" : "disabled",
+    nativeDelegation: "quattro", policyMutation: false,
+    inventory: currentInventory, warnings: warnings(currentInventory)
+  })}\n`);
+  process.exitCode = 1;
+}
+function run() {
+  if (!root || !fs.existsSync(root)) return fail("HBR-LIFECYCLE-ROOT-REQUIRED");
+  if (!["disable", "remove"].includes(command)) return fail("HBR-LIFECYCLE-COMMAND-UNKNOWN");
+  record("started");
+  if (!fixtureAccepted("quattro-disable", ["accepted=true", "confirmation=explicit"])) return decline(command === "disable" ? "disable" : "plugin-removal");
+  fs.writeFileSync(path.join(root, "activation.json"), '{"enabled":false}\n');
+  record("disabled");
+  if (command === "disable") { process.stdout.write(`${JSON.stringify(result("disable"))}\n`); return; }
+  if (!fixtureAccepted("quattro-remove", ["accepted=true", "confirmation=explicit", "disabled=true"])) return decline("plugin-removal");
+  if (fixtureAccepted("quattro-remove", ["partial=true"])) {
+    record("native-removal-partial");
+    const currentInventory = inventory();
+    process.stderr.write(`${JSON.stringify({ kind: "partial", operation: "plugin-removal", activation: "disabled", nativeDelegation: "quattro", policyMutation: false, inventory: currentInventory, warnings: warnings(currentInventory).concat("Native plugin removal was incomplete; rerun after resolving the native boundary."), reasonCode: "HBR-NATIVE-REMOVE-INCOMPLETE" })}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const checkout = path.join(root, "plugin");
+  if (fs.existsSync(checkout)) fs.rmSync(checkout, { recursive: true, force: false });
+  record("completed");
+  process.stdout.write(`${JSON.stringify(result("plugin-removal"))}\n`);
+}
+run();
