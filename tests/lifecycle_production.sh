@@ -46,7 +46,7 @@ fi
 exit 2
 EOF
 chmod +x "$bin/sudo" "$bin/pacman"
-envbase=(HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="${fixture_home}" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_RECIPE_DIR="$recipe" HBR_LIFECYCLE_MANIFEST="$root/manifest.json" HBR_LIFECYCLE_SOURCE="$root")
+envbase=(HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="${fixture_home}" HIBERMACHY_LIFECYCLE_POLICY="$fixture_home/absent-system-policy.conf" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_RECIPE_DIR="$recipe" HBR_LIFECYCLE_MANIFEST="$root/manifest.json" HBR_LIFECYCLE_SOURCE="$root")
 setup=$(env "${envbase[@]}" "$root/lifecycle/install" setup); jq -e '.kind == "accepted" and .activation == "disabled"' <<<"$setup" >/dev/null; grep -qx 'plugin add https://github.com/spitefulFr0g/hibermachy.git' "${fixture_home}/commands"
 env "${envbase[@]}" "$root/lifecycle/install" activate --confirm >/dev/null; update=$(env "${envbase[@]}" "$root/lifecycle/install" update); jq -e '.activation == "enabled"' <<<"$update" >/dev/null
 grep -Fx "build-cwd $fixture_home/.config/omarchy/plugins/dev.hibermachy/packaging" "$fixture_home/commands" > /dev/null
