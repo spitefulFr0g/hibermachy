@@ -1,0 +1,14 @@
+[Unit]
+Description=Hold Marvell Wi-Fi unloaded throughout staged sleep
+DefaultDependencies=no
+StopWhenUnneeded=yes
+Before=systemd-suspend-then-hibernate.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/systemd/system-sleep/mwifiex-hibernate hold
+ExecStopPost=/usr/lib/systemd/system-sleep/mwifiex-hibernate restore
+TimeoutStartSec=30s
+# Three recovery attempts can each spend 12s unloading and 22s loading.
+TimeoutStopSec=120s

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Explicit administrator installation; never called by normal plugin setup.
+set -euo pipefail
+PATH=/usr/bin:/bin
+export PATH
+source_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+hook=/usr/lib/systemd/system-sleep/mwifiex-hibernate
+dropin=/etc/systemd/system/systemd-suspend-then-hibernate.service.d/91-hibermachy-mwifiex.conf
+unit=/etc/systemd/system/hibermachy-mwifiex.service
+backup=/var/lib/hibermachy/backups/mwifiex-hibernate.before-transaction-fix
+legacy_hash=79a0d3b1f3f8c62717296b76f22a7e816040479c534468a71d8e145dd15778cd
+
+fail() { printf 'hibermachy-mwifiex: %s\n' "$*" >&2; exit 1; }
+[[ $# -eq 1 && ( $1 == install || $1 == remove || $1 == status ) ]] || fail 'usage: manage install|status|remove'
+if [[ $1 == status ]]; then
+  if [[ -f $hook && ! -L $hook && -f $dropin && ! -L $dropin ]] &&
+     [[ -f $unit && ! -L $unit ]] && cmp -s "$source_dir/hibermachy-mwifiex.service" "$unit" &&
+     cmp -s "$source_dir/sleep-hook" "$hook" && cmp -s "$source_dir/91-hibermachy-mwifiex.conf" "$dropin"; then
+    printf 'Marvell staged-sleep workaround installed (matches this checkout).\n'
+  elif [[ ! -e $hook && ! -L $hook && ! -e $dropin && ! -L $dropin && ! -e $unit && ! -L $unit ]]; then
+    printf 'Marvell staged-sleep workaround not installed.\n'
+  else
+    fail 'legacy, partial or modified installation; inspect files before changing them'
+  fi
+  exit 0
+fi
+[[ $EUID -eq 0 ]] || fail 'run install/remove as root'
+# Changes are allowed only while all services using this hook are idle.
+for service in suspend-then-hibernate suspend hibernate hybrid-sleep; do
+  active=$(systemctl show --value -p ActiveState "systemd-$service.service")
+  [[ $active == inactive || $active == failed ]] || fail "systemd-$service.service is busy"
+done
+active=$(systemctl show --value -p ActiveState hibermachy-mwifiex.service)
+[[ $active == inactive || $active == failed ]] || fail 'Wi-Fi guard is busy'
+for marker in /run/hibermachy-mwifiex-staged-sleep /run/mwifiex-unloaded-for-hibernate; do
+  [[ ! -e $marker && ! -L $marker ]] || fail 'outstanding recovery; restore Wi-Fi before changing installation'
+done
+
+safe_path() {
+  local destination=$1 parent mode
+  parent=$(dirname -- "$destination")
+  while [[ $parent != / ]]; do
+    [[ ! -L $parent ]] || fail "symlinked parent: $parent"
+    if [[ -e $parent ]]; then
+      [[ -d $parent && $(stat -c %u "$parent") == 0 ]] || fail "unsafe parent: $parent"
+      mode=$(stat -c %a "$parent")
+      (( (8#$mode & 0022) == 0 )) || fail "writable parent: $parent"
+    fi
+    parent=$(dirname -- "$parent")
+  done
+  if [[ -e $destination || -L $destination ]]; then
+    [[ -f $destination && ! -L $destination && $(stat -c '%u:%h' "$destination") == 0:1 ]] || fail "unsafe destination: $destination"
+  fi
+}
+is_legacy() { [[ $(sha256sum "$1" | cut -d ' ' -f 1) == "$legacy_hash" ]]; }
+for path in "$hook" "$dropin" "$unit" "$backup"; do safe_path "$path"; done
+if [[ -e $dropin ]]; then
+  cmp -s "$source_dir/91-hibermachy-mwifiex.conf" "$dropin" || fail 'modified drop-in'
+fi
+if [[ -e $unit ]]; then
+  cmp -s "$source_dir/hibermachy-mwifiex.service" "$unit" || fail 'modified guard unit'
+fi
+if [[ -e $backup ]]; then is_legacy "$backup" || fail 'unrecognized backup'; fi
+legacy=false
+if [[ -e $hook ]] && ! cmp -s "$source_dir/sleep-hook" "$hook"; then
+  if [[ $1 == install ]] && is_legacy "$hook"; then legacy=true
+  else fail 'modified or different-version hook'; fi
+fi
+
+if [[ $1 == install ]]; then
+  if $legacy && [[ ! -e $backup ]]; then
+    install -Dm700 -o root -g root "$hook" "$backup"
+  fi
+  install -Dm755 -o root -g root "$source_dir/sleep-hook" "$hook"
+  install -Dm644 -o root -g root "$source_dir/hibermachy-mwifiex.service" "$unit"
+  install -Dm644 -o root -g root "$source_dir/91-hibermachy-mwifiex.conf" "$dropin"
+else
+  rm -f -- "$dropin" "$unit"
+  if [[ -e $backup ]]; then
+    install -Dm755 -o root -g root "$backup" "$hook"
+  else
+    rm -f -- "$hook"
+  fi
+fi
+systemctl daemon-reload
+printf 'Marvell workaround %s complete; no sleep or driver action requested.\n' "$1"
