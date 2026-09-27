@@ -10,6 +10,7 @@ printf '%s\n' '{"version":1,"revision":1,"automaticPolicyEnabled":true,"idleDela
 cat > "$fixture/fake/Registry.js" <<'JS'
 .pragma library
 var monitors = []
+var inhibited = false
 function input() {
   // A long-delay monitor already active emits no extra signal on input.
   for (var m of monitors) if (m.enabled) {
@@ -21,7 +22,11 @@ function input() {
   }
 }
 function deadline() {
-  for (var m of monitors) if (m.enabled) m.isIdle = true
+  for (var m of monitors) if (m.enabled) m.isIdle = !inhibited || !m.respectInhibitors
+}
+function setInhibited(value) {
+  inhibited = value
+  for (var m of monitors) if (m.enabled && m.respectInhibitors) m.isIdle = !value
 }
 JS
 cat > "$fixture/fake/IdleMonitor.qml" <<'QML'
@@ -62,6 +67,13 @@ Scope {
       test.check(service.simulatedSleepSubmissionCount === 0, "startup cannot submit sleep")
       Registry.deadline()
       test.check(service.simulatedSleepSubmissionCount === 0, "idle without fresh input must remain disarmed")
+      Registry.setInhibited(true)
+      test.check(service.compositorIdleInhibited &&
+        service.automaticReadinessReason() === "HBR-COMPOSITOR-IDLE-INHIBITED",
+        "production idle monitors must report a compositor inhibitor")
+      Registry.setInhibited(false)
+      test.check(!service.compositorIdleInhibited,
+        "releasing the compositor inhibitor must clear its blocker")
       // Removing an idle state due to inhibition is not fresh physical input.
       for (var m of Registry.monitors) if (m.respectInhibitors) m.isIdle = false
       test.check(service.rearmRequired, "inhibitor changes cannot manufacture activity")
