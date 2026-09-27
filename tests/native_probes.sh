@@ -83,10 +83,30 @@ assert.deepEqual(capability, {
   BlockInhibited: "sleep:shutdown", BootId: "01234567-89ab-cdef-0123-456789abcdef"
 });
 
-const malformedCapability = probe.evaluateCapability({ ...adapter, run(command, args) {
-  return command === probe.BUSCTL && args.includes("CanSuspend") ? response('{"type":"s","data":["challenge"]}') : run(command, args);
-} });
-assert.equal(malformedCapability, null);
+// Only yes grants executability. Documented refusals remain observations,
+// so a block inhibitor is not hidden behind an observation-failure result.
+for (const method of ["CanSuspend", "CanHibernate", "CanSuspendThenHibernate"]) {
+  for (const answer of ["yes", "no", "na", "challenge", "inhibited", "inhibitor-blocked", "challenge-inhibitor-blocked"]) {
+    const observed = probe.evaluateCapability({ ...adapter, run(command, args) {
+      return command === probe.BUSCTL && args.includes(method)
+        ? response(JSON.stringify({type:"s", data:[answer]})) : run(command, args);
+    } });
+    assert.equal(observed[method], answer === "yes" ? "yes" : "no");
+    assert.equal(observed.BlockInhibited, "sleep:shutdown");
+  }
+  for (const failed of [{status:1, stdout:'{"type":"s","data":["yes"]}'}, {status:0, stdout:'not-json'}]) {
+    const unavailable = probe.evaluateCapability({ ...adapter, run(command, args) {
+      return command === probe.BUSCTL && args.includes(method) ? failed : run(command, args);
+    } });
+    assert.equal(unavailable, null);
+  }
+  for (const reply of [{type:"s",data:["unknown"]}, {type:"s",data:[]}, {type:"s",data:["yes","no"]}, {type:"b",data:[true]}]) {
+    const malformed = probe.evaluateCapability({ ...adapter, run(command, args) {
+      return command === probe.BUSCTL && args.includes(method) ? response(JSON.stringify(reply)) : run(command, args);
+    } });
+    assert.equal(malformed, null);
+  }
+}
 
 function lidRun(reply) {
   return (command, args) => command === probe.BUSCTL && args.includes("HandleLidSwitch") ? reply : run(command, args);

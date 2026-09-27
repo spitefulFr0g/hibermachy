@@ -156,8 +156,12 @@ function busctlJson(run, args) {
 
 function callCan(run, method) {
   const value = busctlJson(run, ["call", LOGIN1_DESTINATION, LOGIN1_PATH, LOGIN1_INTERFACE, method]);
-  return value && value.type === "s" && Array.isArray(value.data) && value.data.length === 1
-    && (value.data[0] === "yes" || value.data[0] === "no") ? value.data[0] : null;
+  if (!value || value.type !== "s" || !Array.isArray(value.data) || value.data.length !== 1) return null;
+  const answer = value.data[0];
+  if (answer === "yes") return "yes";
+  // These are valid observations, not transport failures. None authorizes
+  // execution; retain BlockInhibited so callers can explain a refusal.
+  return ["no", "na", "challenge", "inhibited", "inhibitor-blocked", "challenge-inhibitor-blocked"].includes(answer) ? "no" : null;
 }
 
 function blockInhibited(run) {
