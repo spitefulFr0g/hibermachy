@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
 
 # HBR-CHK-PANEL-ANNOUNCE-002 establishes that a QML Accessible.announce call is
 # delivered to the accessibility bus as an object:announcement event carrying the
