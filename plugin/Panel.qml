@@ -67,6 +67,23 @@ Panel {
     if (seconds % 60 === 0) return (seconds / 60) + " minute" + (seconds === 60 ? "" : "s")
     return seconds + " seconds"
   }
+  readonly property var lidCloseActionLabels: ({
+    "do-nothing": "do nothing", "lock": "lock", "suspend": "suspend",
+    "hibernate": "hibernate", "staged-sleep": "staged sleep" })
+  // Phrased as an observation, not a setting: Hibermachy reports the lid-close
+  // action and never writes it.
+  function lidCloseActionText(snapshot) {
+    if (!snapshot) return "Lid-close action: unavailable."
+    var label = lidCloseActionLabels[snapshot.lidCloseAction]
+    if (!label) return snapshot.lidCloseActionReasonCode === "HBR-LID-OTHER"
+      ? "Lid-close action: neither suspend nor hibernate. Hibermachy does not change this."
+      : "Lid-close action: could not be observed. Hibermachy does not change this."
+    return "Lid-close action: " + label + ". "
+      + (snapshot.lidCloseActionReachesHibernation
+        ? (snapshot.lidCloseAction === "staged-sleep" ? "The hibernate delay applies." : "The hibernate delay does not apply.")
+        : "It will not hibernate.")
+      + " Hibermachy does not change this."
+  }
   function policyText(policy) {
     if (!policy) return "not set"
     return formatDuration(policy.hibernateDelaySeconds) + ", plugged in " + (policy.hibernateOnAcPower ? "yes" : "no")
@@ -446,6 +463,18 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
           Accessible.name: "Requested and effective system policy and latest request result"
+          onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }
+        }
+        PanelSeparator { width: parent.width }
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.lidCloseActionText(root.statusSnapshot)
+          color: Color.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+          Accessible.name: "Observed lid-close action"
           onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }
         }
         PanelSeparator { width: parent.width }
