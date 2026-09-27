@@ -4,9 +4,11 @@ Hibermachy adds automatic staged sleep to Omarchy: suspend after an idle delay,
 then hibernate after a hibernate delay. Manual staged sleep is also available.
 It preserves Omarchy's existing idle, locking, and power behavior.
 
-The first release, **v0.1.0**, is experimental and is being prepared. No stable
-release is published yet. See the [release preparation record](verification/v0.1.0-preparation.md)
-for completed work and outstanding gates.
+The first release, **v0.1.0**, is [published](https://github.com/spitefulFr0g/hibermachy/releases/tag/v0.1.0)
+as an experimental release. Its attended hardware qualification is incomplete:
+no full observed hibernation and same-session resume cycle was completed. Read
+the [release verification record](verification/v0.1.0-release.md) before using
+automatic staged sleep.
 
 Automatic staged sleep honors Stay Awake and idle inhibitors. Manual staged
 sleep bypasses those two controls while still honoring system sleep inhibitors.
@@ -17,8 +19,9 @@ does not configure the laptop lid action or repair platform hibernation support.
 The plugin starts disabled. System-policy changes require a separately installed,
 root-owned privileged policy helper and interactive administrator authorization.
 The helper cannot initiate sleep. Read the [source-package contract](packaging/README.md)
-before installation; the development recipe deliberately contains release
-checksum and signing-key placeholders and is not an installable release recipe.
+before installation; the repository's development recipe deliberately contains
+release checksum and signing-key placeholders. Use the source-package recipe
+attached to the v0.1.0 release for that version.
 
 Optional hardware workarounds are documented separately:
 
