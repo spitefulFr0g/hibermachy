@@ -67,10 +67,16 @@ Scope {
       test.check(service.simulatedSleepSubmissionCount === 0, "startup cannot submit sleep")
       Registry.deadline()
       test.check(service.simulatedSleepSubmissionCount === 0, "idle without fresh input must remain disarmed")
+      Registry.input()
+      test.check(!service.rearmRequired, "fresh input arms the production monitor path")
       Registry.setInhibited(true)
+      Registry.deadline()
       test.check(service.compositorIdleInhibited &&
         service.automaticReadinessReason() === "HBR-COMPOSITOR-IDLE-INHIBITED",
         "production idle monitors must report a compositor inhibitor")
+      test.check(service.simulatedSleepSubmissionCount === 0,
+        "inhibitor must suppress an armed automatic request through the idle deadline")
+      service.requireFreshActivity()
       Registry.setInhibited(false)
       test.check(!service.compositorIdleInhibited,
         "releasing the compositor inhibitor must clear its blocker")
