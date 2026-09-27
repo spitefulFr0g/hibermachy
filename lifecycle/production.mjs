@@ -59,7 +59,9 @@ function readOnly(program, argv = []) {
   const sessionBus = process.env.DBUS_SESSION_BUS_ADDRESS;
   const sessionEnvironment = process.env.XDG_RUNTIME_DIR === runtimeDirectory
     && sessionBus === `unix:path=${runtimeDirectory}/bus`
-    ? { XDG_RUNTIME_DIR: runtimeDirectory, DBUS_SESSION_BUS_ADDRESS: sessionBus } : {};
+    ? { XDG_RUNTIME_DIR: runtimeDirectory, DBUS_SESSION_BUS_ADDRESS: sessionBus,
+      // Quickshell selects its IPC instance by display even for read-only probes.
+      ...(process.env.WAYLAND_DISPLAY ? { WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY } : {}) } : {};
   const result = spawnSync(program, argv, { encoding: "utf8", timeout: 2000, maxBuffer: 65536,
     env: { PATH: "/usr/bin", LC_ALL: "C", ...sessionEnvironment } });
   return { ok: !result.error && result.status === 0, status: result.status,

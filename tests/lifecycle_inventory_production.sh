@@ -40,6 +40,9 @@ printf '%s\n' '{"requested":{"hibernateDelaySeconds":900,"hibernateOnAcPower":fa
 EOF
 cat > "$plugin/plugin/bin/hibermachy-contract-probe" <<'EOF'
 #!/usr/bin/env bash
+# Like Quickshell, this transport can find only the selected display.
+[[ ${WAYLAND_DISPLAY:-} == wayland-qualification ]] || exit 1
+[[ -z ${HBR_UNRELATED_SECRET:-} && -z ${NODE_OPTIONS:-} ]] || exit 1
 printf '%s\n' '{"compatible":true,"majorVersion":4,"omarchyVersion":"4.0.3"}'
 EOF
 cat > "$plugin/plugin/bin/hibermachy-sleep-capability-probe" <<'EOF'
@@ -48,7 +51,7 @@ printf '%s\n' 'CanSuspend=yes' 'CanHibernate=yes' 'CanSuspendThenHibernate=yes' 
 EOF
 chmod 755 "$bin"/* "$plugin/plugin/bin"/*
 
-envbase=(HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="$fixture_home" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_POLICY="$policy")
+envbase=(XDG_RUNTIME_DIR="/run/user/$(id -u)" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" WAYLAND_DISPLAY=wayland-qualification HBR_UNRELATED_SECRET=sentinel NODE_OPTIONS=--no-warnings HBR_LIFECYCLE_TEST_MODE=1 HIBERMACHY_LIFECYCLE_HOME="$fixture_home" HIBERMACHY_LIFECYCLE_COMMAND_DIR="$bin" HIBERMACHY_LIFECYCLE_POLICY="$policy")
 status=$(env "${envbase[@]}" node "$root/lifecycle/production.mjs" status)
 node -e '
   const result=JSON.parse(process.argv[1]), s=result.scopes;
@@ -56,6 +59,12 @@ node -e '
   for (const key of ["checkout","activation","helper_package","requested_system_policy","effective_system_policy","runtime_dependencies","live_readiness","user_configuration","outcome_history"]) if (s[key].state!=="compatible") process.exit(1);
   if (s.activation.enabled!==true || s.helper_package.release!=="0.1.0") process.exit(1);
 ' "$status"
+
+# Missing display or an invalid session context must remain incomplete.
+for override in WAYLAND_DISPLAY= XDG_RUNTIME_DIR=/not-the-session; do
+  status=$(env "${envbase[@]}" "$override" node "$root/lifecycle/production.mjs" status)
+  node -e 'if (JSON.parse(process.argv[1]).scopes.live_readiness.state !== "incomplete") process.exit(1)' "$status"
+done
 
 cat > "$bin/hibermachy-policy-helper" <<'EOF'
 #!/usr/bin/env bash
