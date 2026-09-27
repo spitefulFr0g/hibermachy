@@ -33,7 +33,7 @@ fn package_metadata_uses_the_canonical_repository_and_valid_srcinfo_indentation(
     assert!(package.contains(&format!("{repository}/releases/download/v${{pkgver}}/")));
     assert!(srcinfo.contains(&format!("\turl = {repository}")));
     assert!(srcinfo.contains(&format!(
-        "\tsource = hibermachy-helper-0.1.0.tar.gz::{repository}/releases/download/v0.1.0/"
+        "\tsource = hibermachy-helper-0.1.1.tar.gz::{repository}/releases/download/v0.1.1/"
     )));
     assert!(!package.contains("github.com/hibermachy/hibermachy"));
     assert!(!srcinfo.contains("github.com/hibermachy/hibermachy"));
