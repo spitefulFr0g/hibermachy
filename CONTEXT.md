@@ -64,6 +64,10 @@ _Avoid_: Hibernation helper, sleep helper
 **Effective system policy**:
 The hibernate delay and AC-power behavior that results after all system configuration and administrator overrides are reconciled.
 
+**Lid-close action**:
+The action the system performs when the laptop lid closes. Hibermachy observes it and reports whether it can reach hibernation; Hibermachy never sets it.
+_Avoid_: Lid policy, lid switch handling
+
 **Sleep executability**:
 Whether staged sleep, hibernation, or suspend can be performed at the present moment, including platform support, authorization, and inhibitors. This is runtime state, not configuration.
 

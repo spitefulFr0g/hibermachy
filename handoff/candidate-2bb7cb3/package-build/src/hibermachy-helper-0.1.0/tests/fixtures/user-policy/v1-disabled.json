@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "revision": 1,
+  "automaticPolicyEnabled": false,
+  "idleDelaySeconds": 1800
+}

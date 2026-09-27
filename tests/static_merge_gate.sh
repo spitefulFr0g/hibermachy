@@ -7,6 +7,10 @@ shell_files=(
   "$root"/lifecycle/status
   "$root"/lifecycle/uninstall
   "$root"/packaging/hibermachy-helper.install
+  "$root"/hardware/mwifiex/manage
+  "$root"/hardware/mwifiex/sleep-hook
+  "$root"/hardware/iptsd/manage
+  "$root"/hardware/iptsd/hibermachy-iptsd-guard
 )
 
 printf '%s\n' 'HBR-CHK-STATIC-001 JSON, shell, and whitespace validation'
@@ -15,7 +19,7 @@ node -e 'for (const file of process.argv.slice(1)) JSON.parse(require("fs").read
 for file in "${shell_files[@]}"; do
   bash -n "$file"
 done
-if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/packaging" "$root/tests" "$root/verification"; then
+if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/packaging" "$root/tests" "$root/verification" "$root/hardware"; then
   printf '%s\n' 'HBR-CHK-STATIC-001 FAILED: trailing whitespace' >&2
   exit 1
 fi
@@ -47,15 +51,19 @@ if rg -n 'command: \["/bin/sh"' "$root/plugin/Service.qml"; then
   exit 1
 fi
 
-printf '%s\n' 'HBR-CHK-STATIC-006 Requested/Effective policy comparison announces non-visually like its neighbors'
+printf '%s\n' 'HBR-CHK-STATIC-006 policy comparison and lid-close action announce non-visually like their neighbors'
 announce_handler='onTextChanged: function(value) { if (value !== "" && Accessible.announce) Qt.callLater(function() { if (visible) Accessible.announce(value, Accessible.Polite) }) }'
 announce_count=$(rg -Fc "$announce_handler" "$root/plugin/Panel.qml" || true)
-if [[ ${announce_count:-0} -ne 3 ]]; then
-  printf '%s\n' "HBR-CHK-STATIC-006 FAILED: expected 3 Accessible.announce onTextChanged handlers (status summary, action result, requested/effective comparison), found ${announce_count:-0}" >&2
+if [[ ${announce_count:-0} -ne 4 ]]; then
+  printf '%s\n' "HBR-CHK-STATIC-006 FAILED: expected 4 Accessible.announce onTextChanged handlers (status summary, action result, requested/effective comparison, lid-close action), found ${announce_count:-0}" >&2
   exit 1
 fi
 if ! rg -A1 -F 'Accessible.name: "Requested and effective system policy and latest request result"' "$root/plugin/Panel.qml" | rg -Fq "$announce_handler"; then
   printf '%s\n' 'HBR-CHK-STATIC-006 FAILED: Requested/Effective comparison text lacks a matching Accessible.announce onTextChanged handler' >&2
+  exit 1
+fi
+if ! rg -A1 -F 'Accessible.name: "Observed lid-close action"' "$root/plugin/Panel.qml" | rg -Fq "$announce_handler"; then
+  printf '%s\n' 'HBR-CHK-STATIC-006 FAILED: lid-close action text lacks a matching Accessible.announce onTextChanged handler' >&2
   exit 1
 fi
 

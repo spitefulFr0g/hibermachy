@@ -7,6 +7,7 @@ if [[ "${HIBERMACHY_MATRIX_CASE:-}" != '1' ]]; then
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_STAGED_SLEEP=0 HIBERMACHY_SIM_SUSPEND=0 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_SYSTEM_INHIBITED=1 HIBERMACHY_EXPECTED_KIND=refused "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVATION_FAILURE=1 HIBERMACHY_EXPECTED_KIND=failed "$0"
+  env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_LID_FAILURE=1 "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=helper-missing "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_OBSERVER_READY=0 HIBERMACHY_EXPECTED_KIND=failed "$0"
   env HIBERMACHY_MATRIX_CASE=1 HIBERMACHY_SIM_CONTRACT=missing HIBERMACHY_EXPECTED_KIND=failed "$0"
@@ -278,6 +279,29 @@ node -e '
   if (!s.sleepExecutability || typeof s.sleepExecutability.observationFailed !== "boolean") process.exit(1);
   if (s.automaticStagedSleepReadiness !== "not-ready" || s.manualStagedSleepReadiness !== process.argv[2]) process.exit(1);
 ' "$status" "$expected_manual"
+printf '%s\n' 'HBR-CHK-READINESS-002 observed lid-close action is reported without participating in readiness'
+node -e '
+  const s = JSON.parse(process.argv[1]);
+  const codes = { "do-nothing": "HBR-LID-NO-SLEEP", "lock": "HBR-LID-NO-SLEEP", "suspend": "HBR-LID-SUSPEND-ONLY",
+    "hibernate": "HBR-LID-HIBERNATE", "staged-sleep": "HBR-LID-STAGED-SLEEP", "other": "HBR-LID-OTHER",
+    "indeterminate": "HBR-LID-INDETERMINATE" };
+  if (!(s.lidCloseAction in codes)) process.exit(1);
+  if (s.lidCloseActionReasonCode !== codes[s.lidCloseAction]) process.exit(1);
+  if (typeof s.lidCloseActionReachesHibernation !== "boolean") process.exit(1);
+  // Only staged sleep and a direct hibernate reach hibernation.
+  if (s.lidCloseActionReachesHibernation !== ["staged-sleep", "hibernate"].includes(s.lidCloseAction)) process.exit(1);
+  // A diagnostic, not a readiness input: the four readiness determinations are unchanged by it.
+  const readiness = s.readiness || {};
+  const expected = ["automatic", "diagnostics", "manual", "systemPolicy"];
+  if (JSON.stringify(Object.keys(readiness).sort()) !== JSON.stringify(expected)) process.exit(1);
+  // An unreadable lid observation must leave every readiness determination alone.
+  if (process.argv[2] === "1") {
+    if (s.lidCloseAction !== "indeterminate") process.exit(1);
+    if (s.lidCloseActionReasonCode !== "HBR-LID-INDETERMINATE") process.exit(1);
+    if (s.lidCloseActionReachesHibernation !== false) process.exit(1);
+    if (readiness.manual !== "ready" || readiness.diagnostics !== "ready") process.exit(1);
+  }
+' "$status" "${HIBERMACHY_SIM_LID_FAILURE:-0}"
 printf '%s\n' 'HBR-CHK-DIAGNOSTICS-002 deterministic diagnostics export is available and redacted'
 diagnostics=$(call "$plugin_id" copyDiagnostics)
 node -e '

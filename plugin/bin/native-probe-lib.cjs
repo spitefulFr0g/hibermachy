@@ -14,6 +14,16 @@ const LOGIN1_DESTINATION = "org.freedesktop.login1";
 const LOGIN1_PATH = "/org/freedesktop/login1";
 const LOGIN1_INTERFACE = "org.freedesktop.login1.Manager";
 const BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+// logind's HandleLidSwitch, mapped to project vocabulary. Anything absent here
+// (poweroff, reboot, halt, kexec, hybrid-sleep, factory-reset) is reported as
+// "other" rather than guessed at.
+const LID_CLOSE_ACTIONS = {
+  "ignore": "do-nothing",
+  "lock": "lock",
+  "suspend": "suspend",
+  "hibernate": "hibernate",
+  "suspend-then-hibernate": "staged-sleep"
+};
 const REQUIRED_CONTRACTS = [
   "shellReady", "pluginDiscovery", "pluginActivation", "manifestSchema",
   "ipcFeatures", "qmlFeatures", "idleMonitor", "helperProtocol",
@@ -156,6 +166,16 @@ function blockInhibited(run) {
     ? value.data : null;
 }
 
+// Read live from logind rather than from logind.conf: a drop-in that logind has
+// not reloaded is not yet what closing the lid will do. Deliberately kept out of
+// evaluateCapability, whose all-or-nothing contract would let this diagnostic
+// disarm staged sleep.
+function lidCloseAction(run) {
+  const value = busctlJson(run, ["get-property", LOGIN1_DESTINATION, LOGIN1_PATH, LOGIN1_INTERFACE, "HandleLidSwitch"]);
+  if (!value || value.type !== "s" || typeof value.data !== "string" || !/^[a-z][a-z-]*$/.test(value.data)) return null;
+  return LID_CLOSE_ACTIONS[value.data] || "other";
+}
+
 function evaluateCapability(adapter) {
   const run = adapter.run;
   const bootId = safeRead(adapter.read, BOOT_ID_PATH).trim();
@@ -173,6 +193,7 @@ module.exports = {
   BOOT_ID_PATH,
   BUSCTL,
   HELPER,
+  LID_CLOSE_ACTIONS,
   LOGIN1_DESTINATION,
   LOGIN1_INTERFACE,
   LOGIN1_PATH,
@@ -182,6 +203,7 @@ module.exports = {
   REQUIRED_CONTRACTS,
   evaluateCapability,
   evaluateContract,
+  lidCloseAction,
   nativeRead,
   nativeRun
 };

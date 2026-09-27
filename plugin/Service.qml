@@ -22,6 +22,7 @@ Item {
   property bool executionInProgress: false
   property bool rearmRequired: true
   property bool freshActivityObserved: false
+  property bool activityBaselineObserved: false
   property bool idleMonitorHealthy: false
   property bool compositorIdleInhibited: false
   property bool stayAwakeKnown: false
@@ -60,6 +61,7 @@ Item {
   property var requestedSystemPolicy: null
   property var effectiveSystemPolicy: null
   property var systemPolicyProvenance: []
+  property string lidCloseAction: ""
   property string systemPolicyReasonCode: "HBR-SYSTEM-POLICY-UNAPPLIED"
   property bool systemPolicyBusy: false
   property string systemPolicyMutation: ""
@@ -97,6 +99,10 @@ Item {
     compositorIdleInhibited: compositorIdleInhibited,
     stayAwake: stayAwakeKnown ? (stayAwakeEnabled ? "on" : "off") : "unknown",
     freshActivityObserved: freshActivityObserved,
+    idleDeadlineReached: automaticIdle(),
+    activityMonitorEnabled: activityMonitor.enabled,
+    activityMonitorIdle: activityMonitor.isIdle,
+    activityBaselineObserved: activityBaselineObserved,
     manualReadinessReasonCode: contractReasonCode("manual"),
     manualBlockerReasonCode: manualReadinessReason(),
     systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
@@ -132,6 +138,9 @@ Item {
     ,requestedSystemPolicy: requestedSystemPolicy
     ,effectiveSystemPolicy: effectiveSystemPolicy
     ,systemPolicyProvenance: systemPolicyProvenance
+    ,lidCloseAction: lidCloseAction || "indeterminate"
+    ,lidCloseActionReasonCode: lidCloseActionReasonCode()
+    ,lidCloseActionReachesHibernation: lidCloseActionReachesHibernation()
     ,systemPolicyReasonCode: systemPolicyReasonCode
     ,lastSystemPolicyMutationResult: lastSystemPolicyMutationResult
     ,systemPolicyReadiness: systemPolicyReasonCode === "HBR-SYSTEM-POLICY-APPLIED" ? "ready" : "not-ready"
@@ -290,6 +299,26 @@ Item {
     return "no suspend or staged sleep executable"
   }
 
+  // Diagnostic only. Deliberately consumed by no readiness determination: what the
+  // lid does is independent of whether Hibermachy can sleep the machine, and an
+  // unreadable lid observation must never disarm staged sleep.
+  function lidCloseActionReasonCode(): string {
+    switch (lidCloseAction) {
+    case "staged-sleep": return "HBR-LID-STAGED-SLEEP"
+    case "hibernate": return "HBR-LID-HIBERNATE"
+    case "suspend": return "HBR-LID-SUSPEND-ONLY"
+    case "lock": case "do-nothing": return "HBR-LID-NO-SLEEP"
+    case "other": return "HBR-LID-OTHER"
+    default: return "HBR-LID-INDETERMINATE"
+    }
+  }
+
+  // Only staged sleep consumes the hibernate delay. A direct hibernate reaches
+  // hibernation without it; everything else never reaches hibernation at all.
+  function lidCloseActionReachesHibernation(): bool {
+    return lidCloseAction === "staged-sleep" || lidCloseAction === "hibernate"
+  }
+
   function activeBlocker(): string {
     if (!contractProbeComplete) return "HBR-CONTRACT-PREFLIGHT-PENDING"
     if (!policySnapshot || !policySnapshot.automaticPolicyEnabled) return "none"
@@ -383,6 +412,8 @@ Item {
   }
 
   function observeFreshActivity() {
+    automaticEvaluationInProgress = false
+    if (freshActivityObserved && !rearmRequired) return true
     freshActivityObserved = true
     if (!persistRearm(false)) {
       freshActivityObserved = false
@@ -392,17 +423,30 @@ Item {
     return true
   }
 
+  function automaticIdle(): bool {
+    return testActivityFixture !== null ? testActivityFixture.idle === true : idleMonitor.isIdle
+  }
+
+  function handleActivityChanged() {
+    if (testActivityFixture !== null || !activityMonitor.enabled) return
+    if (activityMonitor.isIdle) {
+      activityBaselineObserved = true
+    } else if (activityBaselineObserved && !executionInProgress) {
+      observeFreshActivity()
+    }
+  }
+
   function handleIdleChanged() {
     if (testActivityFixture !== null) return
     if (!idleMonitor.isIdle) {
-      observeFreshActivity()
+      automaticEvaluationInProgress = false
       return
     }
     requestAutomaticStagedSleep()
   }
 
   function requestAutomaticStagedSleep() {
-    if (automaticEvaluationInProgress || executionInProgress) return
+    if (automaticEvaluationInProgress || executionInProgress || !automaticIdle()) return
     if (automaticReadiness() !== "ready") return
     automaticEvaluationInProgress = true
     if (testStayAwakeFixture !== null) {
@@ -413,11 +457,12 @@ Item {
   }
 
   function finishAutomaticEvaluation(stayAwake, readFailed) {
+    var requested = automaticEvaluationInProgress
     automaticEvaluationInProgress = false
     stayAwakeKnown = !readFailed
     stayAwakeEnabled = !!stayAwake
     stayAwakeReadFailed = readFailed
-    if (readFailed || stayAwake) return
+    if (readFailed || stayAwake || !requested || !automaticIdle()) return
     if (automaticReadiness() !== "ready") return
     _coordinateStagedSleep("automatic")
   }
@@ -1213,6 +1258,11 @@ Item {
         var pair = line.split("=")
         if (pair.length === 2) values[pair[0]] = pair[1].trim()
       })
+      // simulatedBoolean returns its fallback outside test mode, so production
+      // reaches "indeterminate" only from a genuinely unreadable observation.
+      var observedLid = root.simulatedBoolean("HIBERMACHY_SIM_LID_FAILURE", false)
+        ? "indeterminate" : String(values.LidCloseAction || "indeterminate")
+      root.lidCloseAction = observedLid === "indeterminate" ? "" : observedLid
       root.sleepCapabilityProbeHealthy = exitCode === 0
         && values.CanSuspend !== undefined && values.CanHibernate !== undefined
         && values.CanSuspendThenHibernate !== undefined && values.BlockInhibited !== undefined
@@ -1259,6 +1309,21 @@ Item {
       root.finishObservedAttempt({ attemptId: attempt.attemptId, outcome: "Failed",
         reasonCode: "HBR-SLEEP-UNIT-FAILED", evidenceLevel: "typed-unit-result" })
     }
+  }
+
+  // Observe input independently of the full idle delay. A deadline monitor
+  // emits no transition for typing while it already considers the user active.
+  // Ignoring inhibitors here prevents an inhibitor change from counting as input;
+  // the separate deadline monitor still respects them before requesting sleep.
+  IdleMonitor {
+    id: activityMonitor
+    enabled: root.testActivityFixture === null && root.policyAccepted && root.policySnapshot !== null
+    // Hyprland never emits resumed for zero-timeout notifications. Use its
+    // smallest positive millisecond interval so input can produce an edge.
+    timeout: 0.001
+    respectInhibitors: false
+    onEnabledChanged: if (!enabled) root.activityBaselineObserved = false
+    onIsIdleChanged: root.handleActivityChanged()
   }
 
   IdleMonitor {
@@ -1512,9 +1577,6 @@ Item {
     policyFile.reload()
     historyFile.reload()
     latchFile.reload()
-    Qt.callLater(function() {
-      if (root.testActivityFixture === null && !idleMonitor.isIdle) root.observeFreshActivity()
-    })
   }
 
   IpcHandler {
