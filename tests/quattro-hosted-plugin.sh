@@ -136,7 +136,7 @@ plugins_json() {
   local result=''
   for _ in $(seq 1 50); do
     result=$(call shell listPlugins 2>/dev/null || true)
-    if [[ "$result" == \[* ]]; then
+    if [[ "$result" == \[* && "$result" == *'"id":"dev.hibermachy"'* ]]; then
       printf '%s\n' "$result"
       return 0
     fi
