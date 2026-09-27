@@ -17,7 +17,7 @@ const current = JSON.parse(fs.readFileSync(menu, "utf8"));
 for (const guard of ["quickshell ipc call dev.hibermachy status >/dev/null 2>&1", "omarchy-shell dev.hibermachy status >/dev/null 2>&1"]) {
   const previous = Object.fromEntries(Object.entries(current).map(([id, value]) => {
     const { icon, ...entry } = value;
-    return [id, { ...entry, when: guard }];
+    return [id, { ...entry, label: id === "system.hibermachy-staged-sleep" ? "Suspend then Hibernate" : entry.label, when: guard }];
   }));
   const source = '// retained comment\n' + JSON.stringify({ unrelated: { label: "Keep" }, ...previous });
   fs.writeFileSync(menu, source);
@@ -35,6 +35,12 @@ for (const guard of ["quickshell ipc call dev.hibermachy status >/dev/null 2>&1"
   assert.throws(() => removeOwnedMenu(menu), /HBR-MENU-MANAGED-MODIFIED/);
   assert.equal(fs.readFileSync(menu, "utf8"), JSON.stringify(previous));
 }
+const previousIcons = structuredClone(current);
+previousIcons["system.hibermachy-staged-sleep"].label = "Suspend then Hibernate";
+fs.writeFileSync(menu, JSON.stringify(previousIcons));
+assert.equal(reconcileMenu(menu), "reconciled");
+assert.deepEqual(JSON.parse(fs.readFileSync(menu, "utf8")), current);
+assert.equal(current["system.hibermachy-staged-sleep"].label, "Staged Sleep");
 fs.writeFileSync(menu, JSON.stringify(current));
 assert.equal(removeOwnedMenu(menu), "removed");
 fs.unlinkSync(menu);

@@ -5,16 +5,17 @@ import path from "node:path";
 const ownedIds = ["setup.hibermachy", "system.hibermachy-staged-sleep"];
 const entries = {
   "setup.hibermachy": { managedBy: "hibermachy", icon: "󰒲", label: "Sleep & Hibernation", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Configure Hibermachy sleep and hibernation.", action: "omarchy-shell shell summon dev.hibermachy '{}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" },
-  "system.hibermachy-staged-sleep": { managedBy: "hibermachy", icon: "󰤄", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" }
+  "system.hibermachy-staged-sleep": { managedBy: "hibermachy", icon: "󰤄", label: "Staged Sleep", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" }
 };
 
 // Accept only exact entries emitted by earlier candidate installers. The
 // iconless variant used the fixed guard before icons were introduced.
 function recognizedEntry(id, value) {
   const current = entries[id];
-  const { icon, ...iconless } = current;
+  const previous = { ...current, label: id === "system.hibermachy-staged-sleep" ? "Suspend then Hibernate" : current.label };
+  const { icon, ...iconless } = previous;
   const legacy = { ...iconless, when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" };
-  return [current, iconless, legacy].some(entry => JSON.stringify(entry) === JSON.stringify(value));
+  return [current, previous, iconless, legacy].some(entry => JSON.stringify(entry) === JSON.stringify(value));
 }
 
 function refuse(code) { throw new Error(code); }
