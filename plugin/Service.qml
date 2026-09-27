@@ -427,7 +427,17 @@ Item {
     return testActivityFixture !== null ? testActivityFixture.idle === true : idleMonitor.isIdle
   }
 
+  function updateCompositorIdleInhibition() {
+    if (testActivityFixture !== null) return
+    // Quickshell does not expose an inhibitor flag. Compare equal short idle
+    // intervals: physical input makes both active, while an inhibitor holds
+    // only the monitor that respects inhibitors active.
+    compositorIdleInhibited = activityMonitor.enabled && inhibitorAwareMonitor.enabled
+      && activityMonitor.isIdle && !inhibitorAwareMonitor.isIdle
+  }
+
   function handleActivityChanged() {
+    updateCompositorIdleInhibition()
     if (testActivityFixture !== null || !activityMonitor.enabled) return
     if (activityMonitor.isIdle) {
       activityBaselineObserved = true
@@ -1322,8 +1332,20 @@ Item {
     // smallest positive millisecond interval so input can produce an edge.
     timeout: 0.001
     respectInhibitors: false
-    onEnabledChanged: if (!enabled) root.activityBaselineObserved = false
+    onEnabledChanged: if (!enabled) {
+      root.activityBaselineObserved = false
+      root.updateCompositorIdleInhibition()
+    }
     onIsIdleChanged: root.handleActivityChanged()
+  }
+
+  IdleMonitor {
+    id: inhibitorAwareMonitor
+    enabled: activityMonitor.enabled
+    timeout: activityMonitor.timeout
+    respectInhibitors: true
+    onEnabledChanged: root.updateCompositorIdleInhibition()
+    onIsIdleChanged: root.updateCompositorIdleInhibition()
   }
 
   IdleMonitor {
