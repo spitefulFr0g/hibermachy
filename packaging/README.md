@@ -8,9 +8,11 @@ with the exact release and detached-signature checksums and long-form OpenPGP
 fingerprint. `makepkg` verifies both checksums and the signature before
 compiling as the unprivileged package user.
 
-Those values intentionally remain placeholders until a real release signing
-identity exists. This checkout does not publish an artifact or claim a signing
-identity. Neither source nor signature integrity is skipped.
+The repository recipe retains those placeholders to prevent accidentally
+building an unverified checkout. The v0.1.0 release provides a separate recipe
+filled with the signed archive's checksums and the release signing-key
+fingerprint. Verify the fingerprint independently before trusting the included
+public key. Neither source nor signature integrity is skipped.
 
 The package installs exactly one executable and one Polkit declaration. It does
 not create or apply the systemd policy. The running plugin cannot invoke
