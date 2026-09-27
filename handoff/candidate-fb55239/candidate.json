@@ -1,0 +1,45 @@
+{
+  "status": "superseded-native-activation-defect",
+  "repository": "git@github.com:spitefulFr0g/hibermachy.git",
+  "sourceCommit": "fb5523990f7f1c6cb8ee69d424d54c0e84e167d6",
+  "sourceTree": "6bb13ae0ff735621137169b7cff5f4426b85f7d4",
+  "sourceArchive": "hibermachy-helper-0.1.0.tar.gz",
+  "sourceArchiveSha256": "09f631648227b641da4d696589bd5bb932fda32bf174b9c70adabb9de0a1470e",
+  "signingFingerprint": "0B1C5414F8D18F8B6AA78957335FEBC82DB247EC",
+  "signature": "verified",
+  "ordinaryGates": "passed",
+  "rustTestsPassed": 29,
+  "optimizedBuild": "passed",
+  "hostedMatrix": {
+    "status": "passed",
+    "scenarios": 17,
+    "soakTransitions": 2000,
+    "logSha256": "32bfce150d2160b8c94b1dd1de1ce53177ea88facf00ca457060f6ac634bbb38"
+  },
+  "environment": {
+    "omarchy": "4.0.3-1",
+    "quickshell": "0.3.1-1",
+    "systemd": "261.2-1"
+  },
+  "qualification": {
+    "cleanRoom": "not-run",
+    "attendedHardware": "not-run",
+    "published": false,
+    "localMachine": "in-progress"
+  },
+  "integrationPullRequest": "https://github.com/spitefulFr0g/hibermachy/pull/27",
+  "mergeCommit": "78fdd8e7e1a783596fc5d0ad36fa101f1c0a2d08",
+  "signatureSha256": "26b8b96a4f290be65c2265299a63c0cca6a5ed853b79b6699489796cc6419c40",
+  "helperPackage": {
+    "file": "package-build/hibermachy-helper-0.1.0-1-x86_64.pkg.tar.zst",
+    "sha256": "5690bba925024c2a937feec72af61abcf2c9387cb9409e16c34f6257fdb43665",
+    "build": "passed-unprivileged-host-build",
+    "sourceVerification": "makepkg-sha512-and-GPG-passed",
+    "contentsOwnershipModes": "verified",
+    "installed": false,
+    "recipeSha256": "f392501162c931f8193faeaf54f95095e73f86b4a7526daf409f405c25119014",
+    "srcinfoSha256": "c9f44f60474dde8bbba974b632070dc76f060dea9145bb54fbbd7cb68f49e2a8"
+  },
+  "replacementImplementationCommit": "397bd70",
+  "nativeFixPullRequest": "https://github.com/spitefulFr0g/hibermachy/pull/28"
+}

@@ -1,0 +1,9 @@
+#!/usr/bin/node
+"use strict";
+
+const probe = await import("./native-probe-lib.cjs");
+
+const result = probe.evaluateCapability({ run: probe.nativeRun, read: probe.nativeRead });
+if (!result) process.exit(1);
+for (const key of ["CanSuspend", "CanHibernate", "CanSuspendThenHibernate", "BlockInhibited", "BootId"])
+  process.stdout.write(key + "=" + result[key] + "\n");

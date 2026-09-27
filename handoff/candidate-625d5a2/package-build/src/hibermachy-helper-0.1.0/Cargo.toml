@@ -1,0 +1,14 @@
+[package]
+name = "hibermachy-policy-helper"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[[bin]]
+name = "hibermachy-policy-helper"
+path = "src/main.rs"
+
+[features]
+# This feature exists only for the disposable process-boundary fixture.  It is
+# intentionally not enabled by the production package.
+test-support = []

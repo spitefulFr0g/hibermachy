@@ -1,0 +1,8 @@
+#!/usr/bin/node
+"use strict";
+
+const probe = await import("./native-probe-lib.cjs");
+
+const result = probe.evaluateContract({ run: probe.nativeRun, read: probe.nativeRead });
+process.stdout.write(JSON.stringify(result) + "\n");
+process.exit(0);

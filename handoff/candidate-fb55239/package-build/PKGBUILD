@@ -1,0 +1,34 @@
+pkgname=hibermachy-helper
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Authenticated one-shot helper for Hibermachy requested system policy'
+url='https://github.com/spitefulFr0g/hibermachy'
+arch=('x86_64')
+license=('MIT')
+depends=('glibc' 'polkit')
+makedepends=('rust')
+install=hibermachy-helper.install
+
+# Release automation replaces both sentinels with the reviewed release archive's
+# SHA-512 and the maintainer's long-form OpenPGP fingerprint before publication.
+# Keeping the sentinels here prevents an unsigned or unverifiable package from
+# being accidentally published without inventing a project signing identity.
+source=(
+  "hibermachy-helper-${pkgver}.tar.gz::https://github.com/spitefulFr0g/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz"
+  "hibermachy-helper-${pkgver}.tar.gz.sig::https://github.com/spitefulFr0g/hibermachy/releases/download/v${pkgver}/hibermachy-helper-${pkgver}.tar.gz.sig"
+)
+sha512sums=('2c63aaf7ccb74ce349c3eade7e9586ad39c2ac09a3557a271bae66f266c91f5e13139591525f94c243c666076683e22b0a6d74eea5ddaa47f97ceb48b72d0dfb' 'ce4c110c17d17d68ee58a176139432e95e2901f7922b2c2a1a27da3eabcd5e2336cc8139db5249b129a197d76e7e22e74d4ab2b52eb882cd1df4e5f33733e9e6')
+validpgpkeys=('0B1C5414F8D18F8B6AA78957335FEBC82DB247EC')
+
+build() {
+  cd "$srcdir/hibermachy-helper-${pkgver}"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/hibermachy-helper-${pkgver}"
+  install -Dm755 target/release/hibermachy-policy-helper \
+    "$pkgdir/usr/libexec/hibermachy-policy-helper"
+  install -Dm644 packaging/org.hibermachy.policy-helper.policy \
+    "$pkgdir/usr/share/polkit-1/actions/org.hibermachy.policy-helper.policy"
+}
