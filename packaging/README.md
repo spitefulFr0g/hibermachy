@@ -14,6 +14,13 @@ filled with the signed archive's checksums and the release signing-key
 fingerprint. Verify the fingerprint independently before trusting the included
 public key. Neither source nor signature integrity is skipped.
 
+The [public exposure audit](../verification/2026-09-27-public-exposure-audit.md)
+records that the already-published v0.1.0 source archive also contains historical
+planning, handoff builds, and local machine test evidence. Signature verification
+authenticates those exact published bytes; it does not screen archive contents.
+Review the audit before installing or redistributing this version. Any corrected
+source archive needs a new version and its own signed release assets.
+
 The package installs exactly one executable and one Polkit declaration. It does
 not create or apply the systemd policy. The running plugin cannot invoke
 `makepkg`, pacman, or this package's removal hook. Package removal repeats the

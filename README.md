@@ -10,6 +10,13 @@ no full observed hibernation and same-session resume cycle was completed. Read
 the [release verification record](verification/v0.1.0-release.md) before using
 automatic staged sleep.
 
+A [retrospective public exposure audit](verification/2026-09-27-public-exposure-audit.md)
+found local account and machine metadata in already-public Git history and
+release source archives. No credential or private-key exposure was confirmed.
+The published v0.1.0 assets have not been replaced; wider marketplace promotion
+is pending the recorded owner disposition. Read the audit before redistributing
+or installing the release.
+
 Automatic staged sleep honors Stay Awake and idle inhibitors. Manual staged
 sleep bypasses those two controls while still honoring system sleep inhibitors.
 The panel separates requested system policy, effective system policy, and
