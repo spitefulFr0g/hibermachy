@@ -10,15 +10,16 @@ fn packaging_file(name: &str) -> String {
 }
 
 #[test]
-fn package_manifest_is_source_verified_and_does_not_invent_release_identity() {
+fn package_manifest_is_source_verified_against_the_pinned_release_identity() {
     let package = packaging_file("PKGBUILD");
 
     assert!(package.contains("source=("));
     assert!(package.contains("hibermachy-helper-${pkgver}.tar.gz::"));
     assert!(package.contains("hibermachy-helper-${pkgver}.tar.gz.sig"));
-    assert!(package.contains("sha512sums=('__RELEASE_SHA512__' '__RELEASE_SIGNATURE_SHA512__')"));
-    assert!(package.contains("validpgpkeys=('__RELEASE_SIGNING_KEY__')"));
-    assert!(package.contains("__RELEASE_SIGNATURE_SHA512__"));
+    assert!(!package.contains("__RELEASE_"));
+    assert!(package.contains("sha512sums=('547c1373c86b4897066a3ef9f9d3452d3cd0f2eb62bc312d26428c6506c280fdbf8d07ecab5eb2fdf2acebf81b18d84830c5e7e8bfb4ef1b904fd566892fe4a8'"));
+    assert!(package.contains("'995f6fa6b838def6d27dcbac2f47b40fc38c4ee49628b17606854cb6209a928eba97bec675bb91c92c5f88fc5e9ae6878f50350df69b390bf7b6301e0f43dc37')"));
+    assert!(package.contains("validpgpkeys=('0B1C5414F8D18F8B6AA78957335FEBC82DB247EC')"));
     assert!(!package.contains("SKIP"));
     assert!(package.contains("cargo build --release --locked"));
 }

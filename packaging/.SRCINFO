@@ -11,8 +11,8 @@ pkgbase = hibermachy-helper
 	depends = polkit
 	source = hibermachy-helper-0.1.0.tar.gz::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.0/hibermachy-helper-0.1.0.tar.gz
 	source = hibermachy-helper-0.1.0.tar.gz.sig::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.0/hibermachy-helper-0.1.0.tar.gz.sig
-	validpgpkeys = __RELEASE_SIGNING_KEY__
-	sha512sums = __RELEASE_SHA512__
-	sha512sums = __RELEASE_SIGNATURE_SHA512__
+	validpgpkeys = 0B1C5414F8D18F8B6AA78957335FEBC82DB247EC
+	sha512sums = 547c1373c86b4897066a3ef9f9d3452d3cd0f2eb62bc312d26428c6506c280fdbf8d07ecab5eb2fdf2acebf81b18d84830c5e7e8bfb4ef1b904fd566892fe4a8
+	sha512sums = 995f6fa6b838def6d27dcbac2f47b40fc38c4ee49628b17606854cb6209a928eba97bec675bb91c92c5f88fc5e9ae6878f50350df69b390bf7b6301e0f43dc37
 
 pkgname = hibermachy-helper

@@ -7,8 +7,13 @@ policy="$root/packaging/org.hibermachy.policy-helper.policy"
 install="$root/packaging/hibermachy-helper.install"
 
 bash -n "$install"
-grep -Fq "sha512sums=('__RELEASE_SHA512__' '__RELEASE_SIGNATURE_SHA512__')" "$pkg"
-grep -Fq "validpgpkeys=('__RELEASE_SIGNING_KEY__')" "$pkg"
+if grep -Fq '__RELEASE_' "$pkg"; then
+  printf '%s\n' 'HBR-CHK-PACKAGING-001 FAILED: release checksums and signing key must be pinned' >&2
+  exit 1
+fi
+grep -Eq "^sha512sums=\('[0-9a-f]{128}'$" "$pkg"
+grep -Eq "^            '[0-9a-f]{128}'\)$" "$pkg"
+grep -Eq "^validpgpkeys=\('[0-9A-F]{40}'\)$" "$pkg"
 grep -Fq 'cargo build --release --locked' "$pkg"
 grep -Fq '/usr/libexec/hibermachy-policy-helper' "$pkg"
 grep -Fq '/usr/share/polkit-1/actions/org.hibermachy.policy-helper.policy' "$pkg"
