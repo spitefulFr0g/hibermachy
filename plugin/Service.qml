@@ -22,6 +22,7 @@ Item {
   property bool executionInProgress: false
   property bool rearmRequired: true
   property bool freshActivityObserved: false
+  property bool activityBaselineObserved: false
   property bool idleMonitorHealthy: false
   property bool compositorIdleInhibited: false
   property bool stayAwakeKnown: false
@@ -97,6 +98,10 @@ Item {
     compositorIdleInhibited: compositorIdleInhibited,
     stayAwake: stayAwakeKnown ? (stayAwakeEnabled ? "on" : "off") : "unknown",
     freshActivityObserved: freshActivityObserved,
+    idleDeadlineReached: automaticIdle(),
+    activityMonitorEnabled: activityMonitor.enabled,
+    activityMonitorIdle: activityMonitor.isIdle,
+    activityBaselineObserved: activityBaselineObserved,
     manualReadinessReasonCode: contractReasonCode("manual"),
     manualBlockerReasonCode: manualReadinessReason(),
     systemPolicyReadinessReasonCode: contractReasonCode("system-policy"),
@@ -383,6 +388,8 @@ Item {
   }
 
   function observeFreshActivity() {
+    automaticEvaluationInProgress = false
+    if (freshActivityObserved && !rearmRequired) return true
     freshActivityObserved = true
     if (!persistRearm(false)) {
       freshActivityObserved = false
@@ -392,17 +399,30 @@ Item {
     return true
   }
 
+  function automaticIdle(): bool {
+    return testActivityFixture !== null ? testActivityFixture.idle === true : idleMonitor.isIdle
+  }
+
+  function handleActivityChanged() {
+    if (testActivityFixture !== null || !activityMonitor.enabled) return
+    if (activityMonitor.isIdle) {
+      activityBaselineObserved = true
+    } else if (activityBaselineObserved && !executionInProgress) {
+      observeFreshActivity()
+    }
+  }
+
   function handleIdleChanged() {
     if (testActivityFixture !== null) return
     if (!idleMonitor.isIdle) {
-      observeFreshActivity()
+      automaticEvaluationInProgress = false
       return
     }
     requestAutomaticStagedSleep()
   }
 
   function requestAutomaticStagedSleep() {
-    if (automaticEvaluationInProgress || executionInProgress) return
+    if (automaticEvaluationInProgress || executionInProgress || !automaticIdle()) return
     if (automaticReadiness() !== "ready") return
     automaticEvaluationInProgress = true
     if (testStayAwakeFixture !== null) {
@@ -413,11 +433,12 @@ Item {
   }
 
   function finishAutomaticEvaluation(stayAwake, readFailed) {
+    var requested = automaticEvaluationInProgress
     automaticEvaluationInProgress = false
     stayAwakeKnown = !readFailed
     stayAwakeEnabled = !!stayAwake
     stayAwakeReadFailed = readFailed
-    if (readFailed || stayAwake) return
+    if (readFailed || stayAwake || !requested || !automaticIdle()) return
     if (automaticReadiness() !== "ready") return
     _coordinateStagedSleep("automatic")
   }
@@ -1261,6 +1282,21 @@ Item {
     }
   }
 
+  // Observe input independently of the full idle delay. A deadline monitor
+  // emits no transition for typing while it already considers the user active.
+  // Ignoring inhibitors here prevents an inhibitor change from counting as input;
+  // the separate deadline monitor still respects them before requesting sleep.
+  IdleMonitor {
+    id: activityMonitor
+    enabled: root.testActivityFixture === null && root.policyAccepted && root.policySnapshot !== null
+    // Hyprland never emits resumed for zero-timeout notifications. Use its
+    // smallest positive millisecond interval so input can produce an edge.
+    timeout: 0.001
+    respectInhibitors: false
+    onEnabledChanged: if (!enabled) root.activityBaselineObserved = false
+    onIsIdleChanged: root.handleActivityChanged()
+  }
+
   IdleMonitor {
     id: idleMonitor
     enabled: root.testActivityFixture === null
@@ -1512,9 +1548,6 @@ Item {
     policyFile.reload()
     historyFile.reload()
     latchFile.reload()
-    Qt.callLater(function() {
-      if (root.testActivityFixture === null && !idleMonitor.isIdle) root.observeFreshActivity()
-    })
   }
 
   IpcHandler {
