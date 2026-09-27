@@ -8,6 +8,15 @@ const entries = {
   "system.hibermachy-staged-sleep": { managedBy: "hibermachy", icon: "󰤄", label: "Suspend then Hibernate", aliases: ["sleep", "hibernate", "Hibermachy"], description: "Request Hibermachy staged sleep.", action: "omarchy-shell shell summon dev.hibermachy '{\"action\":\"confirm-staged-sleep\"}'", when: "omarchy-shell dev.hibermachy status >/dev/null 2>&1" }
 };
 
+// Accept only exact entries emitted by earlier candidate installers. The
+// iconless variant used the fixed guard before icons were introduced.
+function recognizedEntry(id, value) {
+  const current = entries[id];
+  const { icon, ...iconless } = current;
+  const legacy = { ...iconless, when: "quickshell ipc call dev.hibermachy status >/dev/null 2>&1" };
+  return [current, iconless, legacy].some(entry => JSON.stringify(entry) === JSON.stringify(value));
+}
+
 function refuse(code) { throw new Error(code); }
 function lstat(file) { try { return fs.lstatSync(file); } catch { return null; } }
 function skipTrivia(source, start) {
@@ -152,7 +161,7 @@ function checkedDocument(source) {
   for (const id of ownedIds) {
     const matches = lexical.properties.filter((property) => property.key === id);
     if (matches.length > 1) refuse("HBR-MENU-MANAGED-MODIFIED");
-    if (matches.length === 1 && JSON.stringify(document[id]) !== JSON.stringify(entries[id])) refuse("HBR-MENU-MANAGED-MODIFIED");
+    if (matches.length === 1 && !recognizedEntry(id, document[id])) refuse("HBR-MENU-MANAGED-MODIFIED");
   }
   return { document, lexical };
 }
@@ -178,11 +187,16 @@ export function reconcileMenu(menu) {
   const stat = validateMenuPath(menu), source = fs.readFileSync(menu, "utf8");
   const { document, lexical } = checkedDocument(source);
   const missing = ownedIds.filter((id) => !Object.hasOwn(document, id));
-  if (!missing.length) return "unchanged";
+  const replacements = lexical.properties.filter(property => ownedIds.includes(property.key)
+    && JSON.stringify(document[property.key]) !== JSON.stringify(entries[property.key]));
+  if (!missing.length && !replacements.length) return "unchanged";
   const trailingComma = lexical.properties.at(-1)?.commaAfter !== null;
   const prefix = lexical.properties.length && !trailingComma ? "," : "";
-  const addition = `${prefix}\n${missing.map((id) => `  ${JSON.stringify(id)}: ${JSON.stringify(entries[id])}`).join(",\n")}\n`;
-  const next = source.slice(0, lexical.close) + addition + source.slice(lexical.close);
+  const addition = missing.length ? `${prefix}\n${missing.map((id) => `  ${JSON.stringify(id)}: ${JSON.stringify(entries[id])}`).join(",\n")}\n` : "";
+  let next = source.slice(0, lexical.close) + addition + source.slice(lexical.close);
+  for (const property of replacements.sort((a, b) => b.start - a.start)) {
+    next = next.slice(0, property.start) + `${JSON.stringify(property.key)}: ${JSON.stringify(entries[property.key])}` + next.slice(property.end);
+  }
   checkedDocument(next); writeAtomically(menu, next, stat); return "reconciled";
 }
 export function removeOwnedMenu(menu) {
