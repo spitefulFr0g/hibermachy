@@ -22,6 +22,6 @@
     "test:system-policy-dispatch": "tests/system_policy_dispatch.sh",
     "test:lifecycle-production": "tests/lifecycle_production.sh && tests/lifecycle_inventory_production.sh && tests/lifecycle_menu.sh",
     "test:iptsd-workaround": "tests/iptsd_workaround.sh",
-    "test:mwifiex-workaround": "python3 hardware/mwifiex/test.py"
+    "test:mwifiex-workaround": "python3 hardware/mwifiex/test.py && python3 hardware/mwifiex/test_install.py"
   }
 }

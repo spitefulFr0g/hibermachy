@@ -1,54 +1,78 @@
 #!/bin/bash
-# Opt-in Surface/Marvell workaround. Install as a root-owned system-sleep hook.
+# Opt-in Surface/Marvell workaround. Install with the staged-sleep drop-in.
 set -u
 export PATH=/usr/bin:/bin
-
-case ${SYSTEMD_SLEEP_ACTION:-${2:-}} in
-  suspend|hibernate|suspend-after-failed-hibernate) ;;
-  *) exit 0 ;;
-esac
+umask 077
 
 module=/sys/module/mwifiex_pcie
 marker=/run/mwifiex-unloaded-for-hibernate
+held=/run/hibermachy-mwifiex-staged-sleep
 log() { /usr/bin/logger -t mwifiex-hibernate -- "$*"; }
 unload() { /usr/bin/timeout --kill-after=2 10 /usr/bin/modprobe -r mwifiex_pcie; }
 load() { /usr/bin/timeout --kill-after=2 20 /usr/bin/modprobe mwifiex_pcie; }
 
-case ${1:-} in
-  pre)
-    # Keep any outstanding restoration obligation, even if an earlier unload
-    # timed out after removing the module. No marker means no ownership.
-    [[ -d $module || -f $marker ]] || exit 0
-    if ! /usr/bin/touch "$marker"; then
-      log "cannot record Wi-Fi restoration; leaving driver untouched"
-      exit 1
-    fi
+prepare() {
+  # Record responsibility even when an unload times out after removing the module.
+  [[ -d $module || -f $marker ]] || return 0
+  if ! /usr/bin/touch "$marker"; then
+    log "cannot record Wi-Fi restoration; leaving driver untouched"
+    return 1
+  fi
+  if [[ -d $module ]] && ! unload; then
+    log "driver unload failed or timed out; restoration remains required"
+    return 1
+  fi
+  [[ ! -d $module ]] || { log "driver still present after unload"; return 1; }
+  log "Wi-Fi driver held for ${1}"
+}
+
+restore() {
+  [[ -f $marker ]] || return 0
+  # A failed preparation may have left the loaded module unhealthy.
+  for attempt in 1 2 3; do
     if [[ -d $module ]] && ! unload; then
-      log "driver unload failed or timed out; restoration remains required"
-      exit 1
-    fi
-    log "Wi-Fi driver held for ${SYSTEMD_SLEEP_ACTION:-${2:-}}"
-    ;;
-  post)
-    [[ -f $marker ]] || exit 0
-    # A failed pre-unload can leave the module loaded but unhealthy. Retry the
-    # removal before loading so a no-op modprobe cannot masquerade as recovery.
-    for attempt in 1 2 3; do
-      if [[ -d $module ]] && ! unload; then
-        log "restoration attempt $attempt: driver still cannot unload"
-      elif load && [[ -d $module ]]; then
-        if ! /usr/bin/rm -f "$marker"; then
-          log "driver loaded, but recovery marker could not be cleared"
-          exit 1
-        fi
-        log "Wi-Fi driver restored after ${SYSTEMD_SLEEP_ACTION:-${2:-}}"
-        exit 0
-      else
-        log "restoration attempt $attempt: driver reload failed"
+      log "restoration attempt $attempt: driver still cannot unload"
+    elif load && [[ -d $module ]]; then
+      if ! /usr/bin/rm -f "$marker"; then
+        log "driver loaded, but recovery marker could not be cleared"
+        return 1
       fi
-      [[ $attempt == 3 ]] || /usr/bin/sleep 1
-    done
-    log "Wi-Fi restoration failed; recovery marker retained at $marker"
-    exit 1
+      log "Wi-Fi driver restored after ${1}"
+      return 0
+    else
+      log "restoration attempt $attempt: driver reload failed"
+    fi
+    [[ $attempt == 3 ]] || /usr/bin/sleep 1
+  done
+  log "Wi-Fi restoration failed; recovery marker retained at $marker"
+  return 1
+}
+
+case ${1:-} in
+  hold)
+    # Guard ExecStart failure blocks the dependent staged-sleep service.
+    # A system-sleep hook's exit status alone cannot prevent entry into sleep.
+    /usr/bin/touch "$held" || exit 1
+    prepare staged-sleep
     ;;
+  restore)
+    # ExecStopPost runs on early wake, normal return, or failed preparation.
+    # Keep both records on failure for explicit recovery while awake.
+    [[ -f $held ]] || exit 0
+    restore staged-sleep && /usr/bin/rm -f "$held"
+    ;;
+  pre|post)
+    action=${SYSTEMD_SLEEP_ACTION:-${2:-}}
+    case $action in
+      suspend|hibernate|suspend-after-failed-hibernate) ;;
+      *) exit 0 ;;
+    esac
+    # The service owns restoration across all intermediate timer wakes and the
+    # failed-hibernation fallback. Ordinary suspend/hibernate keep per-step hooks.
+    if [[ ${2:-} == suspend-then-hibernate && -f $held ]]; then
+      exit 0
+    fi
+    if [[ $1 == pre ]]; then prepare "$action"; else restore "$action"; fi
+    ;;
+  *) exit 0 ;;
 esac

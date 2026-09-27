@@ -7,6 +7,8 @@ shell_files=(
   "$root"/lifecycle/status
   "$root"/lifecycle/uninstall
   "$root"/packaging/hibermachy-helper.install
+  "$root"/hardware/mwifiex/manage
+  "$root"/hardware/mwifiex/sleep-hook
   "$root"/hardware/iptsd/manage
   "$root"/hardware/iptsd/hibermachy-iptsd-guard
 )
