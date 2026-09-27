@@ -7,11 +7,41 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-const { reconcileMenu, removeOwnedMenu } = await import(process.argv.at(-1));
+const { reconcileMenu, removeOwnedMenu, inspectMenu } = await import(process.argv.at(-1));
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "hibermachy-menu-"));
 const menu = path.join(fixture, ".config", "omarchy", "extensions", "omarchy-menu.jsonc");
 fs.mkdirSync(path.dirname(menu), { recursive: true });
 assert.equal(reconcileMenu(menu), "reconciled");
+// Capture current entries, then exercise each exact previous candidate variant.
+const current = JSON.parse(fs.readFileSync(menu, "utf8"));
+for (const guard of ["quickshell ipc call dev.hibermachy status >/dev/null 2>&1", "omarchy-shell dev.hibermachy status >/dev/null 2>&1"]) {
+  const previous = Object.fromEntries(Object.entries(current).map(([id, value]) => {
+    const { icon, ...entry } = value;
+    return [id, { ...entry, label: id === "system.hibermachy-staged-sleep" ? "Suspend then Hibernate" : entry.label, when: guard }];
+  }));
+  const source = '// retained comment\n' + JSON.stringify({ unrelated: { label: "Keep" }, ...previous });
+  fs.writeFileSync(menu, source);
+  assert.equal(inspectMenu(menu).state, "compatible");
+  assert.equal(reconcileMenu(menu), "reconciled");
+  assert.ok(fs.readFileSync(menu, "utf8").startsWith('// retained comment\n'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(menu, "utf8").split('\n').slice(1).join('\n')), { unrelated: { label: "Keep" }, ...current });
+  assert.equal(reconcileMenu(menu), "unchanged");
+  fs.writeFileSync(menu, source);
+  assert.equal(removeOwnedMenu(menu), "removed");
+  assert.equal(inspectMenu(menu).state, "missing");
+  previous["setup.hibermachy"].action = "custom-command";
+  fs.writeFileSync(menu, JSON.stringify(previous));
+  assert.throws(() => reconcileMenu(menu), /HBR-MENU-MANAGED-MODIFIED/);
+  assert.throws(() => removeOwnedMenu(menu), /HBR-MENU-MANAGED-MODIFIED/);
+  assert.equal(fs.readFileSync(menu, "utf8"), JSON.stringify(previous));
+}
+const previousIcons = structuredClone(current);
+previousIcons["system.hibermachy-staged-sleep"].label = "Suspend then Hibernate";
+fs.writeFileSync(menu, JSON.stringify(previousIcons));
+assert.equal(reconcileMenu(menu), "reconciled");
+assert.deepEqual(JSON.parse(fs.readFileSync(menu, "utf8")), current);
+assert.equal(current["system.hibermachy-staged-sleep"].label, "Staged Sleep");
+fs.writeFileSync(menu, JSON.stringify(current));
 assert.equal(removeOwnedMenu(menu), "removed");
 fs.unlinkSync(menu);
 fs.rmdirSync(path.dirname(menu));
