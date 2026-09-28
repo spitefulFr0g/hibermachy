@@ -25,6 +25,8 @@ Item {
   property bool activityBaselineObserved: false
   property bool idleMonitorHealthy: false
   property bool compositorIdleInhibited: false
+  readonly property bool shortIdleMonitorsEnabled: testActivityFixture === null && policyAccepted && policySnapshot !== null
+  readonly property real shortIdleMonitorTimeoutSeconds: 0.001
   property bool stayAwakeKnown: false
   property bool stayAwakeEnabled: false
   property bool stayAwakeReadFailed: false
@@ -102,6 +104,8 @@ Item {
     idleDeadlineReached: automaticIdle(),
     activityMonitorEnabled: activityMonitor.enabled,
     activityMonitorIdle: activityMonitor.isIdle,
+    inhibitorAwareMonitorEnabled: inhibitorAwareMonitor.enabled,
+    inhibitorAwareMonitorIdle: inhibitorAwareMonitor.isIdle,
     activityBaselineObserved: activityBaselineObserved,
     manualReadinessReasonCode: contractReasonCode("manual"),
     manualBlockerReasonCode: manualReadinessReason(),
@@ -1327,10 +1331,10 @@ Item {
   // the separate deadline monitor still respects them before requesting sleep.
   IdleMonitor {
     id: activityMonitor
-    enabled: root.testActivityFixture === null && root.policyAccepted && root.policySnapshot !== null
+    enabled: root.shortIdleMonitorsEnabled
     // Hyprland never emits resumed for zero-timeout notifications. Use its
     // smallest positive millisecond interval so input can produce an edge.
-    timeout: 0.001
+    timeout: root.shortIdleMonitorTimeoutSeconds
     respectInhibitors: false
     onEnabledChanged: if (!enabled) {
       root.activityBaselineObserved = false
@@ -1341,8 +1345,8 @@ Item {
 
   IdleMonitor {
     id: inhibitorAwareMonitor
-    enabled: activityMonitor.enabled
-    timeout: activityMonitor.timeout
+    enabled: root.shortIdleMonitorsEnabled
+    timeout: root.shortIdleMonitorTimeoutSeconds
     respectInhibitors: true
     onEnabledChanged: root.updateCompositorIdleInhibition()
     onIsIdleChanged: root.updateCompositorIdleInhibition()

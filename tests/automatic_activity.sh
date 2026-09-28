@@ -64,6 +64,9 @@ Scope {
       service.setStayAwakeFixture('{"enabled":false}')
       service.requireFreshActivity()
       test.check(service.policyAccepted, "fixture policy must be loaded")
+      test.check(service.statusSnapshot.activityMonitorEnabled &&
+        service.statusSnapshot.inhibitorAwareMonitorEnabled,
+        "both short idle monitors must enable with an accepted policy")
       test.check(service.simulatedSleepSubmissionCount === 0, "startup cannot submit sleep")
       Registry.deadline()
       test.check(service.simulatedSleepSubmissionCount === 0, "idle without fresh input must remain disarmed")
@@ -135,4 +138,68 @@ const result = JSON.parse(fs.readFileSync(process.argv[2]));
 for (const failure of result.failures) console.error('FAIL:', failure);
 if (result.failures.length) process.exit(1);
 console.log('HBR-CHK-AUTO-ACTIVITY-001 real QML handlers re-arm from input and submit only after idle');
+JS
+
+# The real Quickshell IdleMonitor.enabled property does not propagate its
+# startup value through a binding to another monitor. Exercise the shipped
+# monitor declarations against Wayland, without requesting system sleep.
+mkdir -p "$fixture/real"
+cp "$root/plugin/Service.qml" "$fixture/real/Service.qml"
+cat > "$fixture/real/shell.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+Scope {
+  Service { id: service; testActivityFixture: null }
+  FloatingWindow {
+    id: inhibitingWindow
+    implicitWidth: 1
+    implicitHeight: 1
+  }
+  IdleInhibitor { window: inhibitingWindow; enabled: true }
+  FileView { id: result; path: Quickshell.env("HOME") + "/real-result.json" }
+  Timer {
+    interval: 800; running: true
+    onTriggered: {
+      var observations = {compatible:true,majorVersion:4,shellReady:true,pluginDiscovery:true,
+        pluginActivation:true,manifestSchema:true,ipcFeatures:true,qmlFeatures:true,idleMonitor:true,
+        helperProtocol:true,userPolicy:true,systemPolicy:true,logind:true}
+      service.loadContractProbe(JSON.stringify(observations), 0)
+      service.requestedSystemPolicy = {hibernateDelaySeconds:900,hibernateOnAcPower:true}
+      service.effectiveSystemPolicy = service.requestedSystemPolicy
+      service.systemPolicyReasonCode = "HBR-SYSTEM-POLICY-APPLIED"
+      service.setStayAwakeFixture('{"enabled":false}')
+    }
+  }
+  Timer {
+    interval: 1800; running: true
+    onTriggered: result.setText(JSON.stringify({
+      policyAccepted: service.policyAccepted,
+      activityEnabled: service.statusSnapshot.activityMonitorEnabled,
+      inhibitorAwareEnabled: service.statusSnapshot.inhibitorAwareMonitorEnabled,
+      activityIdle: service.statusSnapshot.activityMonitorIdle,
+      inhibitorAwareIdle: service.statusSnapshot.inhibitorAwareMonitorIdle,
+      compositorIdleInhibited: service.statusSnapshot.compositorIdleInhibited,
+      automaticBlockerReasonCode: service.statusSnapshot.automaticBlockerReasonCode
+    }) + "\n")
+  }
+}
+QML
+HOME="$fixture" XDG_CONFIG_HOME="$fixture/.config" HBR_TEST_MODE=1 HBR_CONTRACT_PROBE=/usr/bin/true \
+  timeout 4 quickshell -p "$fixture/real/shell.qml" --no-color > "$fixture/real/log" 2>&1 || [[ $? == 124 ]]
+if [[ ! -f $fixture/real-result.json ]]; then cat "$fixture/real/log"; exit 1; fi
+node - "$fixture/real-result.json" <<'JS'
+const fs = require('node:fs');
+const result = JSON.parse(fs.readFileSync(process.argv[2]));
+if (!result.policyAccepted || !result.activityEnabled || !result.inhibitorAwareEnabled) {
+  console.error('FAIL: real Wayland monitors did not both activate', result);
+  process.exit(1);
+}
+if (!result.activityIdle || result.inhibitorAwareIdle || !result.compositorIdleInhibited ||
+    result.automaticBlockerReasonCode !== 'HBR-COMPOSITOR-IDLE-INHIBITED') {
+  console.error('FAIL: real Wayland inhibitor did not block automatic staged sleep', result);
+  process.exit(1);
+}
+console.log('HBR-CHK-AUTO-ACTIVITY-002 real Wayland inhibitor blocks automatic staged sleep');
 JS
