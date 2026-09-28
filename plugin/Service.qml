@@ -870,6 +870,12 @@ Item {
     var evidence = safeEnum(event.evidenceLevel,
       ["typed-transaction-return", "typed-unit-result", "missing-typed-evidence", "contradictory-typed-evidence"],
       "missing-typed-evidence")
+    // The observer reports the transaction; the coordinator owns fallback
+    // semantics. A returned suspend-only fallback is a degraded outcome.
+    if (outcome === "Completed" && lastSubmission.selectionPath === "suspend-fallback") {
+      outcome = "Degraded"
+      reason = "HBR-SLEEP-SUSPEND-FALLBACK"
+    }
     appendTerminal(eventEnvelope(lastSubmission.attemptId, lastSubmission.origin, lastSubmission.selectedMode,
       "outcome-reconciliation", outcome, reason, evidence, {
         hibernationConfirmed: false, evidenceObserver: true, freeFormJournalUsedForState: false
