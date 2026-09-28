@@ -4,11 +4,13 @@ Hibermachy adds automatic staged sleep to Omarchy: suspend after an idle delay,
 then hibernate after a hibernate delay. Manual staged sleep is also available.
 It preserves Omarchy's existing idle, locking, and power behavior.
 
-The first release, **v0.1.0**, is [published](https://github.com/spitefulFr0g/hibermachy/releases/tag/v0.1.0)
+The current release, **v0.1.1**, is [published](https://github.com/spitefulFr0g/hibermachy/releases/tag/v0.1.1)
 as an experimental release. Its attended hardware qualification is incomplete:
-no full observed hibernation and same-session resume cycle was completed. Read
-the [release verification record](verification/v0.1.0-release.md) before using
-automatic staged sleep.
+the owner waived the remaining attended cases and all observed hibernation and
+same-session resume cycles, so physical hibernation is unverified. Read the
+[release verification record](verification/v0.1.1-release.md) before using
+automatic staged sleep. The [v0.1.0 record](verification/v0.1.0-release.md)
+covers the first release.
 
 A [retrospective public exposure audit](verification/2026-09-27-public-exposure-audit.md)
 found local account and machine metadata in already-public Git history and
@@ -29,7 +31,7 @@ root-owned privileged policy helper and interactive administrator authorization.
 The helper cannot initiate sleep. Read the [source-package contract](packaging/README.md)
 before installation; the repository's development recipe deliberately contains
 release checksum and signing-key placeholders. Use the source-package recipe
-attached to the v0.1.0 release for that version.
+attached to each release for that version.
 
 Optional hardware workarounds are documented separately:
 
