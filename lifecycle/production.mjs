@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
+import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { inspectMenu, reconcileMenu, removeOwnedMenu } from "./menu.mjs";
@@ -22,13 +23,23 @@ const menu = path.join(config, "omarchy", "extensions", "omarchy-menu.jsonc");
 const policy = (testAdapter && process.env.HIBERMACHY_LIFECYCLE_POLICY) || "/etc/systemd/sleep.conf.d/90-hibermachy.conf";
 const helper = "/usr/libexec/hibermachy-policy-helper";
 const bin = (testAdapter && process.env.HIBERMACHY_LIFECYCLE_COMMAND_DIR) || "/usr/bin";
-const recipeDirectory = (testAdapter && process.env.HIBERMACHY_LIFECYCLE_RECIPE_DIR) || path.join(checkout, "packaging");
+const cacheBase = !testAdapter && path.isAbsolute(process.env.XDG_CACHE_HOME || "") ? process.env.XDG_CACHE_HOME : path.join(home, ".cache");
+const releaseCache = path.join(cacheBase, "hibermachy");
+const repositoryUrl = "https://github.com/spitefulFr0g/hibermachy.git";
+// The signed release source embeds the key that must have signed its recipe.
+const releaseSigningKey = "0B1C5414F8D18F8B6AA78957335FEBC82DB247EC";
 const exe = (name) => path.join(bin, name);
 const nodeRuntime = testAdapter ? exe("node") : "/usr/bin/node";
 const pythonRuntime = testAdapter ? exe("python3") : "/usr/bin/python3";
-const run = (name, argv, cwd) => {
-  const result = spawnSync(exe(name), argv, { encoding: "utf8", stdio: "inherit", cwd });
+const run = (name, argv, cwd, environment) => {
+  const result = spawnSync(exe(name), argv, { encoding: "utf8", stdio: "inherit", cwd, env: { ...process.env, ...environment } });
   if (result.error || result.status !== 0) throw new Error(`HBR-LIFECYCLE-${name.toUpperCase()}-FAILED`);
+};
+const capture = (name, argv, { cwd, environment, input } = {}) => {
+  const result = spawnSync(exe(name), argv, { encoding: "utf8", stdio: ["pipe", "pipe", "inherit"], cwd, input,
+    maxBuffer: 1 << 20, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...environment } });
+  if (result.error || result.status !== 0) throw new Error(`HBR-LIFECYCLE-${name.toUpperCase()}-FAILED`);
+  return result.stdout.trim();
 };
 const exists = (p) => { try { return fs.lstatSync(p); } catch { return null; } };
 const scope = (state, ownership, recovery) => ({ state, ownership, reasonCode: `HBR-LIFECYCLE-${state.toUpperCase()}`, recovery: [recovery] });
@@ -125,17 +136,19 @@ function probeKeyValues(program) {
   }
   return values;
 }
+function pluginEnabled() {
+  try {
+    const document = JSON.parse(fs.readFileSync(path.join(config, "omarchy", "shell.json"), "utf8"));
+    if (!document || typeof document !== "object" || (document.plugins !== undefined && !Array.isArray(document.plugins))) return null;
+    return !!(document.plugins || []).find((entry) => entry && entry.id === "dev.hibermachy");
+  } catch { return null; }
+}
 function inventory() {
   const checkout = exists(plugin);
   const manifestPath = path.join(plugin, "manifest.json");
   const manifestFile = exists(manifestPath);
   const manifest = manifestAt(manifestPath);
-  const shell = path.join(config, "omarchy", "shell.json");
-  let enabled = null; try {
-    const document = JSON.parse(fs.readFileSync(shell, "utf8"));
-    if (!document || typeof document !== "object" || (document.plugins !== undefined && !Array.isArray(document.plugins))) throw new Error("invalid shell config");
-    enabled = !!(document.plugins || []).find((entry) => entry && entry.id === "dev.hibermachy");
-  } catch {}
+  const enabled = pluginEnabled();
   const menuInfo = inspectMenu(menu);
   const owned = recognizedPolicy();
   const helperInfo = helperProtocol(manifest?.protocol);
@@ -156,7 +169,7 @@ function inventory() {
   const contractVersion = typeof contract?.omarchyVersion === "string" && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(contract.omarchyVersion)
     && Number.isInteger(contract.majorVersion) && contract.majorVersion === 4;
   const readinessCompatible = contract?.compatible === true && contractVersion && capabilityValid && helperInfo.state === "compatible";
-  const checkoutScope = !checkout ? scope("missing", "user-owned", "Add through Quattro and review source.")
+  const checkoutScope = !checkout ? scope("missing", "user-owned", "Run setup from the verified release; it adds and pins the checkout.")
     : checkout.isSymbolicLink() || !checkout.isDirectory() ? scope("inaccessible", "user-owned", "Resolve the checkout filesystem object before lifecycle changes.")
     : !manifestFile ? scope("incomplete", "user-owned", "Complete the checkout manifest and declared entry points through Quattro.")
     : manifest ? scope("compatible", "user-owned", "Checkout manifest and nested entry points are present.")
@@ -165,7 +178,7 @@ function inventory() {
     checkout: checkoutScope,
     activation: enabled === null ? scope("incomplete", "user-owned", "Query Quattro after rescan.") : { ...scope("compatible", "user-owned", "Activation is separate from automatic policy."), enabled },
     menu_contribution: scope(menuInfo.state, "user-owned", menuInfo.state === "compatible" ? "Managed menu rows are present." : "Reconcile the shared JSONC menu without overwriting modified entries."),
-    helper_package: helperInfo.state === "compatible" ? { ...scope("compatible", "machine-wide", "Helper metadata and protocol overlap are valid."), release: helperInfo.release, protocolMin: helperInfo.protocolMin, protocolMax: helperInfo.protocolMax } : scope(helperInfo.state, "machine-wide", helperInfo.state === "missing" ? "Build the signed release recipe through pacman; plugin activation remains available." : "Preserve the helper and resolve its ownership or protocol before policy mutation."),
+    helper_package: helperInfo.state === "compatible" ? { ...scope("compatible", "machine-wide", "Helper metadata and protocol overlap are valid."), release: helperInfo.release, protocolMin: helperInfo.protocolMin, protocolMax: helperInfo.protocolMax } : scope(helperInfo.state, "machine-wide", helperInfo.state === "missing" ? "Run setup from the verified release with its signed recipe; plugin activation remains available." : "Preserve the helper and resolve its ownership or protocol before policy mutation."),
     requested_system_policy: owned ? scope("compatible", "machine-wide", "Reset through authenticated helper before uninstall.") : exists(policy) ? scope("modified", "machine-wide", "Unrecognized policy is preserved.") : scope("missing", "machine-wide", "No requested policy is present."),
     effective_system_policy: scope(effectiveState, "machine-wide", effectiveState === "modified" ? "Administrator precedence differs from the requested policy." : effectiveState === "compatible" ? (readback?.requested ? "Requested and effective policy agree." : "An effective policy is observed without a Hibermachy requested policy.") : "Read the bundled policy probe before changing policy."),
     runtime_dependencies: scope(dependencies.state, "machine-wide", dependencies.state === "missing" ? "Install system node and python3 plus python-gobject." : dependencies.state === "incomplete" ? "Repair python-gobject Gio availability before staged-sleep observation." : "Node, python3, and Gio are available for bundled probes."),
@@ -174,7 +187,78 @@ function inventory() {
     outcome_history: scope(exists(path.join(home, ".local/state", "hibermachy")) ? "compatible" : "missing", "user-owned", "Retained until purge.")
   }};
 }
-function signedRecipeReady() { return !fs.readFileSync(path.join(recipeDirectory, "PKGBUILD"), "utf8").includes("__RELEASE_"); }
+// Setup and update run from an extracted, signature-verified release archive and
+// its separately published recipe. Nothing is built inside the plugin checkout.
+function releaseRecipe() {
+  const index = args.indexOf("--recipe");
+  const directory = index >= 0 ? args[index + 1] : "";
+  if (!directory || !path.isAbsolute(directory)) throw new Error("HBR-RELEASE-RECIPE-REQUIRED");
+  const files = {};
+  for (const name of ["PKGBUILD", "hibermachy-helper.install", ".SRCINFO"]) {
+    const stat = exists(path.join(directory, name));
+    if (!stat && name === ".SRCINFO") continue;
+    if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error("HBR-RELEASE-RECIPE-INVALID");
+    files[name] = fs.readFileSync(path.join(directory, name));
+  }
+  const text = files.PKGBUILD.toString("utf8");
+  if (text.includes("__RELEASE_")) throw new Error("HBR-HELPER-IMMUTABLE-RELEASE-REQUIRED");
+  const version = text.match(/^pkgver=([0-9]+\.[0-9]+\.[0-9]+)$/m)?.[1];
+  const sums = text.match(/^sha512sums=\('([0-9a-f]{128})' '([0-9a-f]{128})'\)$/m);
+  const key = text.match(/^validpgpkeys=\('([0-9A-F]{40})'\)$/m)?.[1];
+  const tags = [...text.matchAll(/\/releases\/download\/([^/"]+)\/hibermachy-helper-/g)].map((match) => match[1].replaceAll("${pkgver}", version));
+  if (!version || !sums || tags.length !== 2 || tags[0] !== tags[1]
+    || tags[0] !== `v${version}` && !tags[0].startsWith(`v${version}-rc.`) || !/^v[0-9A-Za-z.-]+$/.test(tags[0])) throw new Error("HBR-RELEASE-RECIPE-INVALID");
+  if (key !== releaseSigningKey) throw new Error("HBR-RELEASE-SIGNING-KEY-MISMATCH");
+  if (manifestAt(path.join(checkout, "manifest.json"))?.version !== version) throw new Error("HBR-RELEASE-VERSION-MISMATCH");
+  return { files, version, tag: tags[0], archiveSha512: sums[1] };
+}
+// A tree hash compares exact paths, contents, and executable bits regardless of
+// how the files arrived: signed archive, bootstrap directory, or git checkout.
+function treeOf(directory, scratch) {
+  const gitDirectory = fs.mkdtempSync(path.join(scratch, "tree-"));
+  capture("git", ["init", "--quiet", "--bare", gitDirectory]);
+  const environment = { GIT_DIR: gitDirectory, GIT_WORK_TREE: directory, GIT_INDEX_FILE: path.join(gitDirectory, "index"),
+    GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  capture("git", ["add", "--all", "--force", "."], { cwd: directory, environment });
+  return capture("git", ["write-tree"], { environment });
+}
+function pinCheckout(release, releaseTree, addMissing) {
+  const stat = exists(plugin);
+  if (!stat && !addMissing) throw new Error("HBR-CHECKOUT-MISSING");
+  // --yes keeps Quattro from offering activation; setup never enables the plugin.
+  if (!stat) run("omarchy", ["plugin", "add", repositoryUrl, "--yes"]);
+  const current = exists(plugin), repository = exists(path.join(plugin, ".git"));
+  if (!current || current.isSymbolicLink() || !current.isDirectory()) throw new Error("HBR-CHECKOUT-UNSAFE");
+  if (!repository || repository.isSymbolicLink()) throw new Error("HBR-CHECKOUT-NOT-GIT");
+  const git = (argv) => capture("git", ["-C", plugin, ...argv]);
+  if (git(["status", "--porcelain"])) throw new Error("HBR-CHECKOUT-DIRTY");
+  // Fetch the release tag explicitly instead of trusting the mutable default branch.
+  git(["fetch", "--quiet", "--no-tags", "origin", `refs/tags/${release.tag}`]);
+  if (git(["rev-parse", "FETCH_HEAD^{tree}"]) !== releaseTree) throw new Error("HBR-CHECKOUT-RELEASE-MISMATCH");
+  git(["checkout", "--quiet", "--detach", "FETCH_HEAD^{commit}"]);
+  if (git(["rev-parse", "HEAD^{tree}"]) !== releaseTree || git(["status", "--porcelain"])) throw new Error("HBR-CHECKOUT-RELEASE-MISMATCH");
+}
+function installRelease(release, addMissing) {
+  validatePurgeTree(releaseCache);
+  fs.mkdirSync(releaseCache, { recursive: true, mode: 0o700 });
+  const build = fs.mkdtempSync(path.join(releaseCache, "release-"));
+  try {
+    for (const [name, content] of Object.entries(release.files)) fs.writeFileSync(path.join(build, name), content, { flag: "wx", mode: 0o600 });
+    const makepkgEnvironment = { SRCDEST: build, BUILDDIR: build, PKGDEST: build };
+    // Downloads and verifies both checksums and the OpenPGP signature unprivileged.
+    run("makepkg", ["--verifysource"], build, makepkgEnvironment);
+    const archive = fs.readFileSync(path.join(build, `hibermachy-helper-${release.version}.tar.gz`));
+    if (crypto.createHash("sha512").update(archive).digest("hex") !== release.archiveSha512) throw new Error("HBR-RELEASE-ARCHIVE-UNVERIFIED");
+    const extracted = path.join(build, "verified");
+    fs.mkdirSync(extracted, { mode: 0o700 });
+    capture("tar", ["-x", "-f", "-", "-C", extracted, "--no-same-owner"], { input: zlib.gunzipSync(archive) });
+    const releaseTree = treeOf(path.join(extracted, `hibermachy-helper-${release.version}`), build);
+    if (treeOf(checkout, build) !== releaseTree) throw new Error("HBR-RELEASE-BOOTSTRAP-MISMATCH");
+    pinCheckout(release, releaseTree, addMissing);
+    // makepkg requests administrator authorization only for the pacman install.
+    run("makepkg", ["--syncdeps", "--install", "--cleanbuild"], build, makepkgEnvironment);
+  } finally { fs.rmSync(build, { recursive: true, force: true }); }
+}
 function recognizedPolicy() {
   try {
     const stat = fs.lstatSync(policy);
@@ -189,12 +273,13 @@ function checkInstalledComponents(requireHelper) {
   if (requireHelper && helperProtocol(manifestAt(path.join(plugin, "manifest.json")).protocol).state !== "compatible") throw new Error("HBR-HELPER-VERIFICATION-FAILED");
 }
 function setup() {
-  if (!signedRecipeReady()) throw new Error("HBR-HELPER-IMMUTABLE-RELEASE-REQUIRED");
-  if (!manifestAt(path.join(plugin, "manifest.json"))) run("omarchy", ["plugin", "add", "https://github.com/spitefulFr0g/hibermachy.git"]);
-  run("makepkg", ["--syncdeps", "--install", "--cleanbuild"], recipeDirectory);
+  const release = releaseRecipe();
+  // Moving the checkout under a running plugin is an update, which restores activation.
+  if (pluginEnabled() !== false && exists(plugin)) throw new Error("HBR-SETUP-PLUGIN-ACTIVE");
+  installRelease(release, true);
   checkInstalledComponents(true);
   const menuResult = reconcileMenu(menu);
-  return { kind: "accepted", operation: "setup", activation: "disabled", menu: menuResult, policyMutation: false, inventory: inventory() };
+  return { kind: "accepted", operation: "setup", release: release.tag, activation: "disabled", menu: menuResult, policyMutation: false, inventory: inventory() };
 }
 function updateIntentPath() { return path.join(home, ".local/state/hibermachy/lifecycle-update.json"); }
 function readUpdateIntent() {
@@ -223,37 +308,24 @@ function saveUpdateIntent(previousActivation) {
   try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
 }
 function update() {
-  const currentActivation = inventory().scopes.activation.enabled;
+  const release = releaseRecipe();
+  const currentActivation = pluginEnabled();
   const pending = readUpdateIntent();
   if (!pending && typeof currentActivation !== "boolean") throw new Error("HBR-UPDATE-ACTIVATION-INDETERMINATE");
   const before = pending ? pending.previousActivation : currentActivation;
   if (!pending) saveUpdateIntent(before);
   if (currentActivation) run("omarchy", ["plugin", "disable", "dev.hibermachy"]);
-  run("omarchy", ["plugin", "update", "dev.hibermachy"]);
-  const updated = path.join(plugin, "lifecycle", "production.mjs");
-  const stat = exists(updated);
-  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error("HBR-UPDATE-INTERFACE-MISSING");
-  // Reload the reviewed code from the installed checkout. The old process may
-  // have been launched from a separate bootstrap clone and must not build it.
-  const childEnvironment = { ...process.env };
-  delete childEnvironment.HIBERMACHY_LIFECYCLE_RECIPE_DIR;
-  const next = spawnSync(process.execPath, [updated, "complete-update"], { stdio: "inherit", env: childEnvironment });
-  if (next.error) throw new Error("HBR-UPDATE-TRANSFER-FAILED");
-  process.exit(next.status ?? 1);
-}
-function completeUpdate() {
-  if (path.resolve(checkout) !== path.resolve(plugin)) throw new Error("HBR-UPDATE-CHECKOUT-MISMATCH");
-  const pending = readUpdateIntent();
-  if (!pending) throw new Error("HBR-UPDATE-STATE-MISSING");
-  const before = pending.previousActivation;
-  if (!signedRecipeReady()) throw new Error("HBR-HELPER-IMMUTABLE-RELEASE-REQUIRED");
-  run("makepkg", ["--syncdeps", "--install", "--cleanbuild"], recipeDirectory);
+  installRelease(release, false);
   checkInstalledComponents(true);
   reconcileMenu(menu);
   if (before) run("omarchy", ["plugin", "enable", "dev.hibermachy"]);
   fs.unlinkSync(updateIntentPath());
-  return { kind: "accepted", operation: "update", activation: before ? "enabled" : "disabled", policyMutation: false, inventory: inventory() };
+  return { kind: "accepted", operation: "update", release: release.tag, activation: before ? "enabled" : "disabled", policyMutation: false, inventory: inventory() };
 }
+// v0.1.1 update handed off here after `omarchy plugin update` moved the
+// checkout to the default branch. Keep its saved activation intent and send
+// the operator to the verified release instead of building that revision.
+function completeUpdate() { readUpdateIntent(); throw new Error("HBR-UPDATE-RELEASE-BOOTSTRAP-REQUIRED"); }
 function activate() { if (!args.includes("--confirm")) return { kind: "declined", operation: "activation", activation: "disabled", policyMutation: false }; checkInstalledComponents(false); run("omarchy", ["plugin", "enable", "dev.hibermachy"]); return { kind: "accepted", operation: "activation", activation: "enabled", policyMutation: false, inventory: inventory() }; }
 function disable(remove) {
   // A completed removal has no checkout to delegate to.  Treat that durable
