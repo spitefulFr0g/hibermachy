@@ -15,7 +15,7 @@ shell_files=(
 
 printf '%s\n' 'HBR-CHK-STATIC-001 JSON, shell, and whitespace validation'
 node -e 'for (const file of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(file))' \
-  "$root/package.json" "$root/plugin/manifest.json" "$root/manifest.json"
+  "$root/package.json" "$root/manifest.json"
 for file in "${shell_files[@]}"; do
   bash -n "$file"
 done

@@ -77,12 +77,12 @@ function validBootId(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
 }
 
-function validManifest(manifest, pluginRoot, read) {
+function validManifest(manifest, checkoutRoot, read) {
   if (!manifest || manifest.schemaVersion !== 1 || manifest.id !== "dev.hibermachy") return false;
   if (!Array.isArray(manifest.kinds) || !manifest.kinds.includes("service") || !manifest.kinds.includes("panel")) return false;
-  if (!manifest.entryPoints || manifest.entryPoints.service !== "Service.qml" || manifest.entryPoints.panel !== "Panel.qml") return false;
-  return safeRead(read, path.join(pluginRoot, "Service.qml")).length > 0
-    && safeRead(read, path.join(pluginRoot, "Panel.qml")).length > 0;
+  if (!manifest.entryPoints || manifest.entryPoints.service !== "plugin/Service.qml" || manifest.entryPoints.panel !== "plugin/Panel.qml") return false;
+  return safeRead(read, path.join(checkoutRoot, "plugin", "Service.qml")).length > 0
+    && safeRead(read, path.join(checkoutRoot, "plugin", "Panel.qml")).length > 0;
 }
 
 function includesAll(value, fragments) {
@@ -107,12 +107,13 @@ function omarchyVersion(result) {
 function evaluateContract(adapter) {
   const run = adapter.run;
   const read = adapter.read;
-  const pluginRoot = adapter.pluginRoot || path.resolve(__dirname, "..");
-  const manifest = parseJson(safeRead(read, path.join(pluginRoot, "manifest.json")));
+  // Quattro and the marketplace read the one manifest at the checkout root.
+  const checkoutRoot = adapter.checkoutRoot || path.resolve(__dirname, "..", "..");
+  const manifest = parseJson(safeRead(read, path.join(checkoutRoot, "manifest.json")));
   const registry = safeRead(read, path.join(OMARCHY_SHELL, "services", "PluginRegistry.qml"));
   const idleManifest = parseJson(safeRead(read, path.join(OMARCHY_SHELL, "plugins", "services", "idle", "manifest.json")));
   const idleService = safeRead(read, path.join(OMARCHY_SHELL, "plugins", "services", "idle", "Service.qml"));
-  const service = safeRead(read, path.join(pluginRoot, "Service.qml"));
+  const service = safeRead(read, path.join(checkoutRoot, "plugin", "Service.qml"));
   const ping = run(QUICKSHELL, ["ipc", "-p", OMARCHY_SHELL, "call", "shell", "ping"]);
   const listed = run(QUICKSHELL, ["ipc", "-p", OMARCHY_SHELL, "call", "shell", "listPlugins"]);
   const plugins = parseJson(text(listed));
@@ -131,7 +132,7 @@ function evaluateContract(adapter) {
     pluginActivation: !!ownPlugin && ownPlugin.enabled === true
       && Array.isArray(ownPlugin.kinds) && ownPlugin.kinds.includes("service")
       && ownPlugin.kinds.includes("panel"),
-    manifestSchema: validManifest(manifest, pluginRoot, read),
+    manifestSchema: validManifest(manifest, checkoutRoot, read),
     ipcFeatures: includesAll(registry, ["function setEnabled", "function rescan", "installedPlugins"]),
     qmlFeatures: includesAll(service, ["import Quickshell.Io", "import Quickshell.Wayland", "IpcHandler", "Process"]),
     idleMonitor: !!idleManifest && idleManifest.id === "omarchy.idle" && idleManifest.entryPoints && idleManifest.entryPoints.service === "Service.qml" && includesAll(idleService, ["IdleMonitor", "respectInhibitors"]),

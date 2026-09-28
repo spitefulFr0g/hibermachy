@@ -10,7 +10,7 @@ const root = process.argv[2];
 const probe = require(path.join(root, "plugin/bin/native-probe-lib.cjs"));
 
 const files = {
-  [path.join(root, "plugin/manifest.json")]: JSON.stringify({ schemaVersion: 1, id: "dev.hibermachy", protocol: {min:1,max:1}, kinds: ["service", "panel"], entryPoints: { service: "Service.qml", panel: "Panel.qml" } }),
+  [path.join(root, "manifest.json")]: JSON.stringify({ schemaVersion: 1, id: "dev.hibermachy", protocol: {min:1,max:1}, kinds: ["service", "panel"], entryPoints: { service: "plugin/Service.qml", panel: "plugin/Panel.qml" } }),
   [path.join(root, "plugin/Service.qml")]: "import Quickshell.Io\nimport Quickshell.Wayland\nIpcHandler\nProcess\npolicyPath\nFileView\nloadUserPolicy\nhelperPath\neffectivePolicyReaderPath\nsystemPolicyMatches\n",
   [path.join(root, "plugin/Panel.qml")]: "Item {}",
   "/usr/share/omarchy/shell/services/PluginRegistry.qml": "scan_thirdparty manifest.json registry.pluginsDir function setEnabled function rescan installedPlugins",
@@ -38,7 +38,7 @@ function run(command, args) {
   throw new Error(command + " " + tail);
 }
 
-const adapter = { run, read, pluginRoot: path.join(root, "plugin") };
+const adapter = { run, read, checkoutRoot: root };
 const contract = probe.evaluateContract(adapter);
 assert.equal(contract.compatible, true);
 assert.equal(contract.majorVersion, 4);

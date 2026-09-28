@@ -18,7 +18,7 @@ if ! awk -F'|' '/^\| HBR-REQ-[0-9]{3} / { for (field = 2; field <= 7; field += 1
   printf '%s\n' 'HBR-CHK-TRACEABILITY-001 FAILED: a requirement row contains a placeholder' >&2
   exit 1
 fi
-for path in plugin/Service.qml plugin/Panel.qml plugin/AccessibleConfirmDialog.qml plugin/manifest.json src/main.rs src/secure_fs.rs build.rs lifecycle/install lifecycle/remove lifecycle/status lifecycle/uninstall packaging/PKGBUILD packaging/.SRCINFO tests/fixtures verification; do
+for path in plugin/Service.qml plugin/Panel.qml plugin/AccessibleConfirmDialog.qml manifest.json src/main.rs src/secure_fs.rs build.rs lifecycle/install lifecycle/remove lifecycle/status lifecycle/uninstall packaging/PKGBUILD packaging/.SRCINFO tests/fixtures verification; do
   [[ -e "$root/$path" ]]
 done
 for gate in HBR-CHK-PANEL HBR-CHK-HELPER HBR-CHK-LIFECYCLE HBR-CHK-PACKAGING HBR-CHK-FIXTURE HBR-CHK-SOAK HBR-CHK-STATIC; do

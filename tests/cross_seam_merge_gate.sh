@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-manifest="$root/plugin/manifest.json"
+manifest="$root/manifest.json"
 
 printf '%s\n' 'HBR-CHK-CROSS-001 product, helper, and lifecycle share protocol 1'
 jq -e '(.kinds | sort == ["panel","service"])' "$manifest" >/dev/null

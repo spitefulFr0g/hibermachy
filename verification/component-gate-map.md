@@ -7,7 +7,7 @@ because it is small, generated, or documentation-shaped.
 | --- | --- | --- | --- | --- | --- | --- |
 | `plugin/Service.qml` | required | n/a | n/a | QML | required | required |
 | `plugin/Panel.qml`, `plugin/AccessibleConfirmDialog.qml` | required | n/a | menu adapter | QML/accessibility | required | required |
-| `plugin/manifest.json`, `plugin/Panel.qml` menu adapters | required | n/a | required | generated consistency | required | required |
+| root `manifest.json`, `plugin/Panel.qml` menu adapters | required | n/a | required | generated consistency | required | required |
 | `src/*.rs`, `build.rs` | n/a | required | n/a | Rust/static | required | required |
 | `lifecycle/*` | n/a | n/a | required | shell/static | required | required |
 | `packaging/*` | n/a | required | required | package validation | required | candidate |
