@@ -50,7 +50,8 @@ printf 'makepkg %s\n' "$*" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 [[ $SRCDEST == "$PWD" && -f PKGBUILD && -f hibermachy-helper.install ]]
 # Only the download step gets quiet curl; the build keeps the user's makepkg configuration.
 if [[ $1 == --verifysource ]]; then
-  [[ $MAKEPKG_CONF == "$PWD/makepkg.conf" ]] && grep -qF -- '+=" -sS"' "$MAKEPKG_CONF"
+  [[ $MAKEPKG_CONF == "$PWD/makepkg.conf" ]]
+  grep -qF -- '+=" -sS"' "$MAKEPKG_CONF"
   cp "$HBR_RELEASE_ARCHIVE" "$SRCDEST/"; exit 0
 fi
 [[ -z ${MAKEPKG_CONF:-} ]]

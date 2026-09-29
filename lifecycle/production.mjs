@@ -290,7 +290,8 @@ function installRelease(release, addMissing) {
     try { removeBuild(build); } catch {}
     throw error;
   }
-  removeBuild(build);
+  // The helper is installed at this point; a leftover build directory is harmless.
+  try { removeBuild(build); } catch {}
 }
 function recognizedPolicy() {
   try {
