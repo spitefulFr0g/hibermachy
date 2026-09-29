@@ -49,7 +49,8 @@ printf 'build-cwd %s\n' "$PWD" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 printf 'makepkg %s\n' "$*" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 [[ $SRCDEST == "$PWD" && -f PKGBUILD && -f hibermachy-helper.install ]]
 if [[ $1 == --verifysource ]]; then cp "$HBR_RELEASE_ARCHIVE" "$SRCDEST/"; exit 0; fi
-[[ ${HBR_FAIL_MAKEPKG:-0} != 1 ]] || exit 1
+# Like makepkg, a failed build() leaves pkg/ without read or write permission.
+if [[ ${HBR_FAIL_MAKEPKG:-0} == 1 ]]; then mkdir -p pkg/hibermachy-helper; chmod 111 pkg; exit 1; fi
 cat > "$HIBERMACHY_LIFECYCLE_COMMAND_DIR/hibermachy-policy-helper" <<'HELPER'
 #!/usr/bin/env bash
 printf 'release=0.1.0 protocol-min=1 protocol-max=1\n'
@@ -96,6 +97,11 @@ sed "s/^pkgver=.*/pkgver=9.9.9/" "$recipe/PKGBUILD" > "$fixture/PKGBUILD.other";
 cp "$fixture/PKGBUILD.other" "$fixture/other-version/PKGBUILD"; cp "$recipe/hibermachy-helper.install" "$fixture/other-version/"
 refused HBR-RELEASE-VERSION-MISMATCH lifecycle setup --recipe "$fixture/other-version"
 [[ ! -e "$fixture_home/commands" && ! -e "$plugin" ]]
+# rustup can provide cargo without a default toolchain; refuse before adding anything.
+printf '#!/usr/bin/env bash\nexit 1\n' > "$bin/cargo"; chmod +x "$bin/cargo"
+refused HBR-BUILD-TOOLCHAIN-NOT-READY lifecycle setup --recipe "$recipe"
+[[ ! -e "$fixture_home/commands" && ! -e "$plugin" ]]
+rm "$bin/cargo"
 
 # A substituted archive, or a bootstrap which differs from the signed archive,
 # stops before the checkout is added or anything is installed.

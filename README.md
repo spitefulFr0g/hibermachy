@@ -48,9 +48,10 @@ initiate sleep. See the [helper package contract](packaging/README.md).
 - An x86_64 Arch system whose platform can already hibernate (swap large
   enough for memory, a configured resume device). Hibermachy does not set this
   up.
-- `pacman -S --needed base-devel git gnupg rust nodejs python python-gobject polkit`.
-  `rust` is only needed to build the helper; `nodejs`, `python` and
-  `python-gobject` are runtime dependencies of the plugin.
+- `pacman -S --needed base-devel git gnupg nodejs python python-gobject polkit`,
+  plus a Rust toolchain to build the helper: either the `rust` package, or
+  `rustup` with a default toolchain (`rustup default stable`). `nodejs`,
+  `python` and `python-gobject` are runtime dependencies of the plugin.
 
 ## Install
 
@@ -178,6 +179,7 @@ Every command prints JSON. A refusal has `"kind": "refused"` and a
 | `HBR-CHECKOUT-DIRTY` | The plugin checkout has local changes. Inspect `git -C ~/.config/omarchy/plugins/dev.hibermachy status`. If nothing there is yours, run `remove` and then `setup` from the verified release, and activate again. |
 | `HBR-SETUP-PLUGIN-ACTIVE` | Hibermachy is enabled, or `~/.config/omarchy/shell.json` cannot be read. Use `update` for an enabled plugin; otherwise repair that file. |
 | `HBR-CHECKOUT-MISSING` | `update` needs an existing checkout. Run `setup` instead. |
+| `HBR-BUILD-TOOLCHAIN-NOT-READY` | `cargo` cannot run. With rustup, run `rustup default stable`. |
 | `HBR-RUNTIME-DEPENDENCIES-NOT-READY` | Install `nodejs`, `python` and `python-gobject`. |
 | `HBR-UPDATE-RELEASE-BOOTSTRAP-REQUIRED` | Run `update` from a verified release, as described above. |
 

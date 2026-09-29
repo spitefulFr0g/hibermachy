@@ -242,6 +242,17 @@ function pinCheckout(release, releaseTree, addMissing) {
   git(["checkout", "--quiet", "--detach", "FETCH_HEAD^{commit}"]);
   if (git(["rev-parse", "HEAD^{tree}"]) !== releaseTree || git(["status", "--porcelain"])) throw new Error("HBR-CHECKOUT-RELEASE-MISMATCH");
 }
+// makepkg removes read and write permission from pkg/ while build() runs, and a
+// failed build leaves it that way. Restore owner access before removing the tree.
+function removeBuild(build) {
+  const unlock = (entry) => {
+    if (!fs.lstatSync(entry).isDirectory()) return;
+    fs.chmodSync(entry, 0o700);
+    for (const name of fs.readdirSync(entry)) unlock(path.join(entry, name));
+  };
+  unlock(build);
+  fs.rmSync(build, { recursive: true, force: true });
+}
 function installRelease(release, addMissing) {
   validatePurgeTree(releaseCache);
   fs.mkdirSync(releaseCache, { recursive: true, mode: 0o700 });
@@ -261,7 +272,12 @@ function installRelease(release, addMissing) {
     pinCheckout(release, releaseTree, addMissing);
     // makepkg requests administrator authorization only for the pacman install.
     run("makepkg", ["--syncdeps", "--install", "--cleanbuild"], build, makepkgEnvironment);
-  } finally { fs.rmSync(build, { recursive: true, force: true }); }
+  } catch (error) {
+    // A failed cleanup must not hide why the install failed.
+    try { removeBuild(build); } catch {}
+    throw error;
+  }
+  removeBuild(build);
 }
 function recognizedPolicy() {
   try {
@@ -276,8 +292,17 @@ function checkInstalledComponents(requireHelper) {
   if (runtimeDependencies().state !== "compatible") throw new Error("HBR-RUNTIME-DEPENDENCIES-NOT-READY");
   if (requireHelper && helperProtocol(manifestAt(path.join(plugin, "manifest.json")).protocol).state !== "compatible") throw new Error("HBR-HELPER-VERIFICATION-FAILED");
 }
+// rustup provides cargo without necessarily configuring a toolchain. Check it
+// first, because makepkg would otherwise fail after the checkout was added.
+function checkBuildToolchain() {
+  const cargo = exe("cargo");
+  if (!exists(cargo)) return; // makepkg --syncdeps installs the rust package.
+  const result = spawnSync(cargo, ["--version"], { stdio: "ignore", timeout: 30000 });
+  if (result.error || result.status !== 0) throw new Error("HBR-BUILD-TOOLCHAIN-NOT-READY");
+}
 function setup() {
   const release = releaseRecipe();
+  checkBuildToolchain();
   // Moving the checkout under a running plugin is an update, which restores activation.
   if (pluginEnabled() !== false && exists(plugin)) throw new Error("HBR-SETUP-PLUGIN-ACTIVE");
   installRelease(release, true);
@@ -313,6 +338,7 @@ function saveUpdateIntent(previousActivation) {
 }
 function update() {
   const release = releaseRecipe();
+  checkBuildToolchain();
   const currentActivation = pluginEnabled();
   const pending = readUpdateIntent();
   if (!pending && typeof currentActivation !== "boolean") throw new Error("HBR-UPDATE-ACTIVATION-INDETERMINATE");
