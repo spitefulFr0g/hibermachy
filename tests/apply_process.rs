@@ -189,7 +189,7 @@ fn read_only_protocol_probe_reports_release_and_supported_range_without_root() {
     );
     assert_eq!(
         String::from_utf8(result.stdout).unwrap(),
-        "release=0.1.1 protocol-min=1 protocol-max=1\n"
+        "release=0.1.2 protocol-min=1 protocol-max=1\n"
     );
     assert!(!target.exists());
 }

@@ -92,7 +92,7 @@ fn hbr_chk_helper_002_input_gate_accepts_only_protocol_probe_and_policy_boundari
     assert!(probe.status.success());
     assert_eq!(
         String::from_utf8(probe.stdout).unwrap(),
-        "release=0.1.1 protocol-min=1 protocol-max=1\n"
+        "release=0.1.2 protocol-min=1 protocol-max=1\n"
     );
     assert!(!target.exists());
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dev.hibermachy",
   "name": "Hibermachy",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Hibermachy contributors",
   "license": "MIT",
   "description": "Disabled-first automatic staged sleep policy and status.",

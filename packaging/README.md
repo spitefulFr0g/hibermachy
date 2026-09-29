@@ -9,10 +9,21 @@ fingerprint. `makepkg` verifies both checksums and the signature before
 compiling as the unprivileged package user.
 
 The repository recipe retains those placeholders to prevent accidentally
-building an unverified checkout. The v0.1.0 release provides a separate recipe
-filled with the signed archive's checksums and the release signing-key
-fingerprint. Verify the fingerprint independently before trusting the included
-public key. Neither source nor signature integrity is skipped.
+building an unverified checkout. Each release attaches a separate recipe
+(`hibermachy-helper-<version>-recipe.tar.gz`) filled with the signed archive's
+checksums and the release signing-key fingerprint. Verify the fingerprint
+independently before trusting the included public key. Neither source nor
+signature integrity is skipped.
+
+Since v0.1.2 the recipe is consumed by `lifecycle/install setup|update --recipe
+<absolute directory>`, run from the extracted signed source (see the
+[install instructions](../README.md#install)). Before building, the lifecycle
+command refuses a recipe that still holds placeholders, names another signing
+key, or belongs to another version. After `makepkg --verifysource` it requires
+that the extracted source and the plugin checkout's release tag have the same
+Git tree as the signed archive. It then pins the checkout to that tag and runs
+`makepkg --syncdeps --install --cleanbuild` in a temporary directory under
+`~/.cache/hibermachy`, never inside the plugin checkout.
 
 The [public exposure audit](../verification/2026-09-27-public-exposure-audit.md)
 records that the already-published v0.1.0 source archive also contains historical
