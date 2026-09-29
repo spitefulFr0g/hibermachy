@@ -23,6 +23,12 @@ if rg -n '[[:blank:]]+$' "$root/plugin" "$root/src" "$root/lifecycle" "$root/pac
   printf '%s\n' 'HBR-CHK-STATIC-001 FAILED: trailing whitespace' >&2
   exit 1
 fi
+# Lifecycle setup requires the signed `git archive` to have the release tag's
+# exact tree, so export attributes would make every release unverifiable.
+if git -C "$root" grep -nE 'export-(ignore|subst)' -- ':(glob)**/.gitattributes'; then
+  printf '%s\n' 'HBR-CHK-STATIC-001 FAILED: export attributes change the signed release tree' >&2
+  exit 1
+fi
 
 printf '%s\n' 'HBR-CHK-STATIC-002 lifecycle JavaScript parses without executing host operations'
 for file in "$root/lifecycle/install" "$root/lifecycle/remove" "$root/lifecycle/production.mjs" "$root/plugin/bin/policy-readback.cjs" "$root/plugin/bin/hibermachy-policy-readback"; do

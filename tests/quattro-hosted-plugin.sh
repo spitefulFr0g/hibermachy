@@ -79,7 +79,10 @@ fi
 if [[ "${HIBERMACHY_SEED_PRIVATE_HISTORY:-}" == 1 ]]; then
   printf '%s\n' '{"schemaVersion":1,"openAttempt":null,"terminalOutcomes":[{"wallTime":"2030-01-01T00:00:00.000Z","phase":"private-phase-/home/alice","outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","evidenceLevel":"private-evidence","requestedMode":"private-request","selectedMode":"private-selected","details":{"private":"alice@example.test"}}],"suppressionSummaries":[],"notificationFingerprints":[],"notifications":[{"outcome":"private-outcome","reasonCode":"HBR-PRIVATE-ALICE","humanCopy":"alice@example.test"}]}' > "$test_root/.local/state/hibermachy/outcomes.json"
 fi
-cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id"
+# Stage the repository layout Omarchy clones: the root manifest names plugin/ entry points.
+mkdir -p "$test_root/.config/omarchy/plugins/$plugin_id"
+cp manifest.json "$test_root/.config/omarchy/plugins/$plugin_id/manifest.json"
+cp -R plugin "$test_root/.config/omarchy/plugins/$plugin_id/plugin"
 printf '%s\n' '{"version":1,"plugins":[]}' > "$test_root/.config/omarchy/shell.json"
 
 helper_fixture="$test_root/helper-fixture"

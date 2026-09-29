@@ -23,8 +23,8 @@ const menu = path.join(config, "omarchy", "extensions", "omarchy-menu.jsonc");
 const policy = (testAdapter && process.env.HIBERMACHY_LIFECYCLE_POLICY) || "/etc/systemd/sleep.conf.d/90-hibermachy.conf";
 const helper = "/usr/libexec/hibermachy-policy-helper";
 const bin = (testAdapter && process.env.HIBERMACHY_LIFECYCLE_COMMAND_DIR) || "/usr/bin";
-const cacheBase = !testAdapter && path.isAbsolute(process.env.XDG_CACHE_HOME || "") ? process.env.XDG_CACHE_HOME : path.join(home, ".cache");
-const releaseCache = path.join(cacheBase, "hibermachy");
+// Fixed under HOME so the owned-tree checks apply to every build directory.
+const releaseCache = path.join(home, ".cache", "hibermachy");
 const repositoryUrl = "https://github.com/spitefulFr0g/hibermachy.git";
 // The signed release source embeds the key that must have signed its recipe.
 const releaseSigningKey = "0B1C5414F8D18F8B6AA78957335FEBC82DB247EC";
@@ -137,8 +137,11 @@ function probeKeyValues(program) {
   return values;
 }
 function pluginEnabled() {
+  const settings = path.join(config, "omarchy", "shell.json");
+  // Quattro enables a community plugin only by listing it in shell.json.
+  if (!exists(settings)) return false;
   try {
-    const document = JSON.parse(fs.readFileSync(path.join(config, "omarchy", "shell.json"), "utf8"));
+    const document = JSON.parse(fs.readFileSync(settings, "utf8"));
     if (!document || typeof document !== "object" || (document.plugins !== undefined && !Array.isArray(document.plugins))) return null;
     return !!(document.plugins || []).find((entry) => entry && entry.id === "dev.hibermachy");
   } catch { return null; }
@@ -230,7 +233,8 @@ function pinCheckout(release, releaseTree, addMissing) {
   const current = exists(plugin), repository = exists(path.join(plugin, ".git"));
   if (!current || current.isSymbolicLink() || !current.isDirectory()) throw new Error("HBR-CHECKOUT-UNSAFE");
   if (!repository || repository.isSymbolicLink()) throw new Error("HBR-CHECKOUT-NOT-GIT");
-  const git = (argv) => capture("git", ["-C", plugin, ...argv]);
+  // No checkout hook runs while the tree is still being compared with the signed archive.
+  const git = (argv) => capture("git", ["-C", plugin, "-c", "core.hooksPath=/dev/null", ...argv]);
   if (git(["status", "--porcelain"])) throw new Error("HBR-CHECKOUT-DIRTY");
   // Fetch the release tag explicitly instead of trusting the mutable default branch.
   git(["fetch", "--quiet", "--no-tags", "origin", `refs/tags/${release.tag}`]);

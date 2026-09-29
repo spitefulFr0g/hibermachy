@@ -125,6 +125,11 @@ if git -C "$plugin" symbolic-ref -q HEAD >/dev/null; then exit 1; fi
 grep -q "^build-cwd $fixture_home/.cache/hibermachy/release-" "$fixture_home/commands"
 grep -qx 'makepkg --verifysource' "$fixture_home/commands"; grep -qx 'makepkg --syncdeps --install --cleanbuild' "$fixture_home/commands"
 [[ $(cached_builds) -eq 0 ]]
+# Without a user shell.json Quattro enables no community plugin, so setup can be
+# retried over the existing checkout (for example after a failed package build).
+rm "$fixture_home/.config/omarchy/shell.json"
+jq -e '.kind == "accepted" and .activation == "disabled"' <<<"$(lifecycle setup --recipe "$recipe")" >/dev/null
+[[ $(git -C "$plugin" rev-parse 'HEAD^{tree}') == "$release_tree" && ! -e "$fixture_home/.config/omarchy/shell.json" ]]
 lifecycle activate --confirm >/dev/null
 refused HBR-SETUP-PLUGIN-ACTIVE lifecycle setup --recipe "$recipe"
 printf '%s\n' 'HBR-CHK-LIFECYCLE-PRODUCTION-004 setup installs only a signed, tag-pinned release and builds outside the checkout'

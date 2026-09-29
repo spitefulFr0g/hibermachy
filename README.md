@@ -171,7 +171,7 @@ Every command prints JSON. A refusal has `"kind": "refused"` and a
 | `HBR-RELEASE-ARCHIVE-UNVERIFIED`, `HBR-RELEASE-BOOTSTRAP-MISMATCH` | The archive or the source you ran differs from the signed release. Download and verify it again. |
 | `HBR-CHECKOUT-RELEASE-MISMATCH` | The release tag in the repository does not match the signed archive. Do not install; report it. |
 | `HBR-CHECKOUT-DIRTY` | The plugin checkout has local changes. Inspect `git -C ~/.config/omarchy/plugins/dev.hibermachy status`. If nothing there is yours, run `remove` and then `setup` from the verified release, and activate again. |
-| `HBR-SETUP-PLUGIN-ACTIVE` | Hibermachy is already enabled. Use `update` instead of `setup`. |
+| `HBR-SETUP-PLUGIN-ACTIVE` | Hibermachy is enabled, or `~/.config/omarchy/shell.json` cannot be read. Use `update` for an enabled plugin; otherwise repair that file. |
 | `HBR-CHECKOUT-MISSING` | `update` needs an existing checkout. Run `setup` instead. |
 | `HBR-RUNTIME-DEPENDENCIES-NOT-READY` | Install `nodejs`, `python` and `python-gobject`. |
 | `HBR-UPDATE-RELEASE-BOOTSTRAP-REQUIRED` | Run `update` from a verified release, as described above. |
