@@ -4,10 +4,11 @@ Hibermachy adds automatic staged sleep to Omarchy: suspend after an idle delay,
 then hibernate after a hibernate delay. Manual staged sleep is also available.
 It preserves Omarchy's existing idle, locking, and power behavior.
 
-The current release, **v0.1.2**, is an experimental release published on the
-[releases page](https://github.com/spitefulFr0g/hibermachy/releases). It changes
-installation and updates only; staged-sleep behavior is unchanged from
-[v0.1.1](verification/v0.1.1-release.md).
+The current release, **v0.1.2**, is an experimental release
+[published](https://github.com/spitefulFr0g/hibermachy/releases/tag/v0.1.2)
+with a [verification record](verification/v0.1.2-release.md) of what its
+installer was tested on. It changes installation and updates only; staged-sleep
+behavior is unchanged from [v0.1.1](verification/v0.1.1-release.md).
 
 **Physical hibernation is unverified.** The attended hardware qualification is
 incomplete: the owner waived the remaining attended cases and all observed
