@@ -166,8 +166,8 @@ policy or package is gone. Rerunning it after a partial failure is safe.
 
 ## Recovery
 
-Every command prints JSON. A refusal has `"kind": "refused"` and a
-`reasonCode`:
+Every command prints JSON, and in a terminal it ends with a one-line summary.
+A refusal has `"kind": "refused"` and a `reasonCode`:
 
 | Reason code | Meaning and fix |
 | --- | --- |

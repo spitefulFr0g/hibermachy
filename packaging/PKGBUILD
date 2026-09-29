@@ -8,6 +8,7 @@ license=('MIT')
 depends=('glibc' 'polkit')
 makedepends=('rust')
 install=hibermachy-helper.install
+options=('!debug')
 
 # Release automation replaces both sentinels with the reviewed release archive's
 # SHA-512 and the maintainer's long-form OpenPGP fingerprint before publication.

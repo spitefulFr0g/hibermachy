@@ -9,6 +9,7 @@ pkgbase = hibermachy-helper
 	makedepends = rust
 	depends = glibc
 	depends = polkit
+	options = !debug
 	source = hibermachy-helper-0.1.2.tar.gz::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.2/hibermachy-helper-0.1.2.tar.gz
 	source = hibermachy-helper-0.1.2.tar.gz.sig::https://github.com/spitefulFr0g/hibermachy/releases/download/v0.1.2/hibermachy-helper-0.1.2.tar.gz.sig
 	validpgpkeys = __RELEASE_SIGNING_KEY__

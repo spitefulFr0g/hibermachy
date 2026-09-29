@@ -48,7 +48,12 @@ set -euo pipefail
 printf 'build-cwd %s\n' "$PWD" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 printf 'makepkg %s\n' "$*" >> "$HIBERMACHY_LIFECYCLE_HOME/commands"
 [[ $SRCDEST == "$PWD" && -f PKGBUILD && -f hibermachy-helper.install ]]
-if [[ $1 == --verifysource ]]; then cp "$HBR_RELEASE_ARCHIVE" "$SRCDEST/"; exit 0; fi
+# Only the download step gets quiet curl; the build keeps the user's makepkg configuration.
+if [[ $1 == --verifysource ]]; then
+  [[ $MAKEPKG_CONF == "$PWD/makepkg.conf" ]] && grep -qF -- '+=" -sS"' "$MAKEPKG_CONF"
+  cp "$HBR_RELEASE_ARCHIVE" "$SRCDEST/"; exit 0
+fi
+[[ -z ${MAKEPKG_CONF:-} ]]
 # Like makepkg, a failed build() leaves pkg/ without read or write permission.
 if [[ ${HBR_FAIL_MAKEPKG:-0} == 1 ]]; then mkdir -p pkg/hibermachy-helper; chmod 111 pkg; exit 1; fi
 cat > "$HIBERMACHY_LIFECYCLE_COMMAND_DIR/hibermachy-policy-helper" <<'HELPER'
@@ -149,6 +154,11 @@ jq -e '.previousActivation == true' "$fixture_home/.local/state/hibermachy/lifec
 touch "$plugin/local-change"
 refused HBR-CHECKOUT-DIRTY lifecycle update --recipe "$recipe"
 refused HBR-UPDATE-RELEASE-BOOTSTRAP-REQUIRED lifecycle complete-update
+# In a terminal a command ends with one readable line; captured output stays JSON only.
+tty_run() { script -qec "$(printf '%q ' env "${envbase[@]}" "$bootstrap/lifecycle/install" "$@")" /dev/null; }
+grep -q 'Nothing changed. Run activate --confirm to enable Hibermachy.' <<<"$(tty_run activate)"
+grep -q 'Hibermachy complete-update stopped: HBR-UPDATE-RELEASE-BOOTSTRAP-REQUIRED' <<<"$(tty_run complete-update || true)"
+if lifecycle activate 2>&1 | grep -q 'Nothing changed'; then exit 1; fi
 rm "$plugin/local-change"
 recovered=$(lifecycle update --recipe "$recipe")
 jq -e '.activation == "enabled"' <<< "$recovered" > /dev/null

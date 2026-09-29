@@ -244,6 +244,17 @@ function pinCheckout(release, releaseTree, addMissing) {
 }
 // makepkg removes read and write permission from pkg/ while build() runs, and a
 // failed build leaves it that way. Restore owner access before removing the tree.
+// makepkg reads this file instead of its default configuration, so it loads the
+// same files in the same order and only appends -sS to the curl download agents.
+// That hides progress meters and keeps errors; -q must remain curl's first option.
+const quietDownloadConfig = [
+  "source /etc/makepkg.conf",
+  "for conf in /etc/makepkg.conf.d/*.conf; do if [[ -r $conf ]]; then source \"$conf\"; fi; done",
+  "user_conf=${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf",
+  "if [[ -r $user_conf ]]; then source \"$user_conf\"; elif [[ -r $HOME/.makepkg.conf ]]; then source \"$HOME/.makepkg.conf\"; fi",
+  "for index in \"${!DLAGENTS[@]}\"; do if [[ ${DLAGENTS[index]} == *::/usr/bin/curl\\ * ]]; then DLAGENTS[index]+=\" -sS\"; fi; done",
+  "unset conf user_conf index",
+  ""].join("\n");
 function removeBuild(build) {
   const unlock = (entry) => {
     if (!fs.lstatSync(entry).isDirectory()) return;
@@ -260,8 +271,10 @@ function installRelease(release, addMissing) {
   try {
     for (const [name, content] of Object.entries(release.files)) fs.writeFileSync(path.join(build, name), content, { flag: "wx", mode: 0o600 });
     const makepkgEnvironment = { SRCDEST: build, BUILDDIR: build, PKGDEST: build };
+    const quietConfig = path.join(build, "makepkg.conf");
+    fs.writeFileSync(quietConfig, quietDownloadConfig, { flag: "wx", mode: 0o600 });
     // Downloads and verifies both checksums and the OpenPGP signature unprivileged.
-    run("makepkg", ["--verifysource"], build, makepkgEnvironment);
+    run("makepkg", ["--verifysource"], build, { ...makepkgEnvironment, MAKEPKG_CONF: quietConfig });
     const archive = fs.readFileSync(path.join(build, `hibermachy-helper-${release.version}.tar.gz`));
     if (crypto.createHash("sha512").update(archive).digest("hex") !== release.archiveSha512) throw new Error("HBR-RELEASE-ARCHIVE-UNVERIFIED");
     const extracted = path.join(build, "verified");
@@ -406,7 +419,33 @@ function uninstall(purge) {
   }
   return { kind: "accepted", operation: purge ? "purge" : "uninstall", inventory: inventory() };
 }
+// People running a command in a terminal get one readable line after the JSON.
+// Captured output, as used by scripts and the panel, stays JSON only.
+function summarize(result) {
+  if (!process.stderr.isTTY) return;
+  const activateCommand = path.join(plugin, "lifecycle", "install") + " activate --confirm";
+  const lines = {
+    "accepted setup": `Hibermachy ${result.release} is installed and disabled. Activate it with:\n  ${activateCommand}`,
+    "accepted update": `Hibermachy is updated to ${result.release}; the plugin is ${result.activation}.`,
+    "accepted activation": "Hibermachy is enabled. Automatic staged sleep stays off until you turn it on in the panel.",
+    "declined activation": "Nothing changed. Run activate --confirm to enable Hibermachy.",
+    "accepted disable": "Hibermachy is disabled. Everything stays installed.",
+    "accepted plugin-removal": "Hibermachy is disabled and its plugin checkout is removed. The helper, system policy and your settings remain.",
+    "accepted uninstall": "Hibermachy is uninstalled. Your settings and history remain until purge.",
+    "accepted purge": "Hibermachy is uninstalled and its settings and history are deleted.",
+    "declined purge": "Hibermachy is uninstalled. Add --confirm-purge to also delete its settings and history.",
+  };
+  const line = result.kind === "refused"
+    ? `Hibermachy ${result.operation} stopped: ${result.reasonCode}. See Recovery in ${repositoryUrl.replace(/\.git$/, "")}#recovery`
+    : lines[`${result.kind} ${result.operation}`];
+  if (line) process.stderr.write(`\n${line}\n`);
+}
 try {
   const result = command === "status" ? inventory() : command === "setup" ? setup() : command === "activate" ? activate() : command === "update" ? update() : command === "complete-update" ? completeUpdate() : command === "disable" ? disable(false) : command === "remove" ? disable(true) : command === "uninstall" ? uninstall(false) : command === "purge" ? uninstall(true) : (() => { throw new Error("HBR-LIFECYCLE-COMMAND-UNKNOWN"); })();
   process.stdout.write(JSON.stringify(result) + "\n");
-} catch (error) { process.stderr.write(JSON.stringify({ kind: "refused", operation: command, reasonCode: error.message, inventory: inventory() }) + "\n"); process.exitCode = 1; }
+  summarize(result);
+} catch (error) {
+  process.stderr.write(JSON.stringify({ kind: "refused", operation: command, reasonCode: error.message, inventory: inventory() }) + "\n");
+  summarize({ kind: "refused", operation: command, reasonCode: error.message });
+  process.exitCode = 1;
+}
