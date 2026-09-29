@@ -25,6 +25,11 @@ remaining public metadata exposure after this limited audit and is not planning
 further checks or artifact remediation at this time. Read the audit before
 redistributing or installing the release.
 
+Since v0.1.2 the historical planning notes (`.scratch/`) and candidate handoff
+records (`handoff/`, including prebuilt helper builds) are no longer in the
+source tree or release archive. Verification records that cite them refer to
+earlier tags such as `v0.1.1`.
+
 Automatic staged sleep honors Stay Awake and idle inhibitors. Manual staged
 sleep bypasses those two controls while still honoring system sleep inhibitors.
 The panel separates requested system policy, effective system policy, and

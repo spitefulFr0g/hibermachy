@@ -1,2 +1,0 @@
-#!/usr/bin/node
-(await import('./policy-readback.cjs')).default.main();

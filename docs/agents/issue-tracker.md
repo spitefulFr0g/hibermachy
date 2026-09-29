@@ -2,7 +2,7 @@
 
 GitHub Issues in `spitefulFr0g/hibermachy` are authoritative for specs and tickets. Use the `gh` CLI from this clone so it resolves the repository from `origin`.
 
-The existing local Markdown artifacts under `.scratch/hibermachy/` are historical planning evidence. Preserve them and do not use them for frontier, claim, dependency, status, or closeout decisions.
+The historical local Markdown planning artifacts (`.scratch/hibermachy/`) and candidate handoff records (`handoff/`) were removed from the tree for v0.1.2. They remain in Git history, for example at tag `v0.1.1`. Do not use them for frontier, claim, dependency, status, or closeout decisions.
 
 ## Tracker operations
 
